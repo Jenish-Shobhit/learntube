@@ -1,0 +1,19 @@
+.DS_Store
+
+# Release packages generated for browser store uploads.
+*.zip
+*.crx
+
+# Local scratch/output files.
+tmp/
+dist/
+build/
+
+# Dependencies, if tooling is added later.
+node_modules/
+
+# Personal/dev artifacts kept out of the shipped, public source tree.
+personal_artifacts/
+
+# Claude Code harness state (not part of the extension).
+.claude/

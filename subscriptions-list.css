@@ -1,0 +1,1949 @@
+/* =====================================================================
+   YouTube Rework — Subscriptions list view
+   ---------------------------------------------------------------------
+   Every rule is double-gated:
+     html.yt-rework                        -> the master on/off toggle (set by content.js)
+     ytd-browse[page-subtype="subscriptions"] -> only the Subscriptions page
+   This is what keeps it from touching the homepage, search, or watch pages,
+   and what makes it survive YouTube's in-app (SPA) navigation.
+   ===================================================================== */
+
+/* 1. Collapse the responsive thumbnail grid to a single column ---------- */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-grid-renderer {
+  --ytd-rich-grid-items-per-row: 1 !important;
+  --ytd-rich-grid-item-max-width: 9999px !important;
+  --ytd-rich-grid-item-min-width: 100% !important;
+  --ytd-rich-grid-item-margin: 0px !important;
+  --ytd-rich-grid-row-margin: 0px !important;
+  --ytd-rich-grid-gutter-margin: 0px !important;
+}
+
+/* 2. Each video becomes a full-width row ------------------------------- */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer > #content {
+  width: 100% !important;
+}
+
+/* 3. Remove the thumbnail (the whole point) ---------------------------- */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-thumbnail,
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-playlist-thumbnail,
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #thumbnail {
+  display: none !important;
+}
+
+/* 4. Lay the surviving content out as a tight horizontal row ----------- */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-grid-media {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: baseline !important;
+  gap: 12px !important;
+  padding: 7px 0 !important;
+  border-bottom: 1px solid var(--yt-spec-10-percent-layer, rgba(128,128,128,0.18)) !important;
+}
+
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #details.ytd-rich-grid-media {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: baseline !important;
+  gap: 14px !important;
+  flex-wrap: wrap !important;
+}
+
+/* Title: single line, readable, no oversized grid sizing */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #video-title {
+  font-size: 1.4rem !important;
+  line-height: 1.45 !important;
+  margin: 0 !important;
+  max-height: none !important;
+  -webkit-line-clamp: 1 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  overflow: hidden !important;
+  flex: 1 1 420px !important;
+  min-width: 0 !important;
+}
+
+/* Metadata (channel name, views, age) sits inline after the title */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #metadata,
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #metadata-line {
+  margin: 0 !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: baseline !important;
+  gap: 6px 12px !important;
+  flex-wrap: wrap !important;
+  font-size: 1.2rem !important;
+  opacity: 0.8 !important;
+}
+
+/* Trim the three-dot menu / hover badges so rows stay flush */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #menu {
+  margin: 0 !important;
+}
+
+/* 5. Hide the recommended / "people also watched" shelves that YouTube
+      drops into the feed (delete this block to keep them). ------------- */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-section-renderer {
+  display: none !important;
+}
+
+/* =====================================================================
+   6. NEW YouTube layout — yt-lockup-view-model (the current feed)
+   ---------------------------------------------------------------------
+   YouTube migrated the Subscriptions feed to <yt-lockup-view-model>, and
+   in early 2026 it DROPPED the "-wiz" suffix from the inner class names
+   (e.g. .yt-lockup-metadata-view-model__title, no longer ...-wiz__title)
+   and started shipping camelCase twins (.ytLockupMetadataViewModelTitle).
+   Each selector below lists BOTH forms via :is() so a build that ships
+   either one still matches. The goal is a calm two-line card:
+
+        (avatar)  Channel name · time      <- byline (stays at default order)
+                  Video title              <- title (pushed below: order 2)
+
+   Robustness trick: we only force the TITLE's order. The byline (whatever
+   its exact class) keeps its default order 0, so it floats ABOVE the title
+   without us needing to name it — one less class to get wrong.
+
+   Native default already puts the avatar at the left and stacks the text;
+   we just flip title/byline and tidy sizes. If the layout ever reverts to
+   "title above channel", the title/text-container classes below have
+   drifted — inspect a row and update the :is() lists. Every rule stays
+   double-gated on html.yt-rework ytd-browse[page-subtype="subscriptions"].
+   ===================================================================== */
+
+/* 6a. Hide the thumbnail in the lockup. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model :is(.yt-lockup-view-model__content-image, .ytLockupViewModelContentImage, yt-thumbnail-view-model, yt-collection-thumbnail-view-model) {
+  display: none !important;
+}
+
+/* 6b. The row is a rounded "card" that lights up on hover (no hard dividers —
+   spacing + the hover wash do the separating, the calm/Apple way). */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 1px 0 !important;
+  padding: 11px 14px !important;
+  border: 0 !important;
+  border-radius: 14px !important;
+  transition: background-color 140ms ease !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-view-model__metadata, .ytLockupViewModelMetadata) {
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* 6c. Inner wrapper -> flex row: avatar (left) | text block (fills rest). */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-metadata-view-model {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 14px !important;
+  width: 100% !important;
+}
+
+/* 6d. Avatar -> clean round sender mark with a hairline ring, pinned left. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__avatar, .ytLockupMetadataViewModelAvatar) {
+  order: -1 !important;
+  flex: 0 0 40px !important;
+  width: 40px !important;
+  height: 40px !important;
+  min-width: 40px !important;
+  margin: 0 !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+  align-self: center !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__avatar, .ytLockupMetadataViewModelAvatar) :is(img, .yt-avatar-shape__image) {
+  display: block !important;
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 50% !important;
+  object-fit: cover !important;
+}
+
+/* 6e. Text block -> vertical stack (channel above, title below). */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__text-container, .ytLockupMetadataViewModelTextContainer) {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  gap: 1px !important;
+}
+
+/* 6f. Push the title BELOW the byline. Order the title itself AND — via :has —
+   whatever element directly wraps it, so the flip works whether the title is a
+   direct child of the text container or nested one level inside a heading. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__title, .ytLockupMetadataViewModelTitle),
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__text-container, .ytLockupMetadataViewModelTextContainer) > *:has(> :is(.yt-lockup-metadata-view-model__title, .ytLockupMetadataViewModelTitle)) {
+  order: 2 !important;
+}
+
+/* 6g. Title text -> the lighter "subject" line (much LESS bold than the channel
+   name above it), at most two lines. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__title, .ytLockupMetadataViewModelTitle) {
+  margin: 0 !important;
+  font-size: 1.3rem !important;
+  line-height: 1.4 !important;
+  font-weight: 300 !important;
+  color: var(--yt-spec-text-primary, #f1f1f1) !important;
+  opacity: 0.62 !important; /* recede further behind the bold channel name */
+  -webkit-line-clamp: 2 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  overflow: hidden !important;
+  min-width: 0 !important;
+}
+
+/* 6h. Byline row -> a flex line holding [channel · views · time] and, packed
+   snug right after it, the injected star control. The row's base is the QUIET
+   views/time; the channel NAME link is overridden below to be the bold, bright
+   "sender" — the most prominent text in the card. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__metadata, .ytLockupMetadataViewModelMetadata) {
+  margin: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  font-size: 1.2rem !important;
+  opacity: 1 !important;
+  color: var(--yt-spec-text-secondary, #909090) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__metadata, .ytLockupMetadataViewModelMetadata) yt-content-metadata-view-model {
+  display: flex !important;
+  flex-flow: row wrap !important;
+  align-items: baseline !important;
+  gap: 2px 8px !important;
+  flex: 0 1 auto !important;
+  min-width: 0 !important;
+}
+/* The channel NAME link -> extra-bold + bright, clearly the most prominent text.
+   Matched by the channel href (`/@`, `/channel/`, `/c/`, `/user/`) so it survives
+   a byline class rename; the title is a `/watch` link, so it's untouched, and the
+   star buttons are <button>, so they aren't caught either. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__text-container, .ytLockupMetadataViewModelTextContainer) :is(a[href^="/@"], a[href*="/channel/"], a[href^="/c/"], a[href^="/user/"]) {
+  font-size: 1.4rem !important;
+  font-weight: 800 !important;
+  color: var(--yt-spec-text-primary, #f1f1f1) !important;
+}
+
+/* 6i. Creator star rating — display-only marker that sits SNUG after the channel
+   byline (bound to the name, App-Store style — not flung to the row's edge). A
+   GIVEN rating (gold) is always visible; the empty slots are nearly invisible
+   until you hover the row, so unrated rows stay clean. content.js injects the
+   buttons + stamps .is-filled; clicking sets the rating (synced). Never sorts. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-stars {
+  margin-left: 4px !important; /* a hair of space after "· 2 hr ago" */
+  display: inline-flex !important;
+  gap: 3px !important;
+  flex: 0 0 auto !important;
+  align-self: center !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-star {
+  all: unset !important;
+  cursor: pointer !important;
+  font-size: 1.15rem !important;
+  line-height: 1 !important;
+  padding: 0 1px !important;
+  color: #ffffff !important;
+  opacity: 0 !important; /* Step 15: empty slot is INVISIBLE — no star noise */
+  transition: opacity 140ms ease, color 140ms ease, transform 110ms ease !important;
+}
+/* Reveal the empty slots when the row is hovered (so you can rate in place). */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model:hover .ytr-star {
+  opacity: 0.5 !important;
+}
+/* A set rating is always fully visible, gold, hover or not. (This page-scoped
+   reskin of YouTube's own DOM is NOT an injected surface, so it keeps its own
+   literal; the value matches the design system's ratings --lt-gold #ffd60a.) */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-star.is-filled {
+  color: #ffd60a !important;
+  opacity: 1 !important;
+}
+/* The star under the cursor pops, for clear click feedback. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-star:hover {
+  opacity: 1 !important;
+  color: #ffd970 !important;
+  transform: scale(1.12) !important;
+}
+
+/* 6j. The per-row native 3-dot menu — Step 15 REPLACES it (the doc's "mystery
+   menu that wasn't ours"). YouTube's overflow is fully hidden; our own quiet
+   overflow control (6k) sits snug after the stars with inbox-language actions
+   (Save to topic / Archive). The selector lists the BEM button class plus YouTube's
+   usual menu wrappers (whichever the live build ships); none match `.ytr-star`
+   or `.ytr-ovf`, so our injected controls are never hidden. (Was: faded-on-hover
+   in earlier steps — now display:none, since we provide the replacement.) */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model :is(.yt-lockup-metadata-view-model__menu-button, .ytLockupMetadataViewModelMenuButton, ytd-menu-renderer, yt-icon-button, button-view-model) {
+  display: none !important;
+}
+
+/* 6k. Our own per-row overflow control (Step 15) — replaces the native menu.
+   A quiet "···" button injected by content.js onto the byline line next to the
+   stars; on click content.js builds a dropdown menu (Save-to-topic + Archive)
+   and toggles `.is-open` on the wrapper. Injected UI -> styled from the shared
+   --lt-* tokens; double-gated because it lives inside a Subscriptions row. The
+   button is faded until the row is hovered (calm by default), like the stars. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf {
+  position: relative !important;
+  flex: 0 0 auto !important;
+  align-self: center !important;
+  margin-left: var(--lt-space-1) !important; /* snug after the stars, not flung to the row's edge */
+  display: inline-flex !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-btn {
+  all: unset !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: var(--lt-fs-xs) !important; /* was 1rem (10px) — too small a target */
+  line-height: 1 !important;
+  letter-spacing: 0.05em !important;
+  padding: var(--lt-space-1) var(--lt-space-2) !important;
+  border-radius: var(--lt-radius-ctl) !important;
+  color: var(--lt-text-3) !important;
+  opacity: 0 !important; /* hidden until row hover -> no clutter */
+  transition: opacity var(--lt-dur-fast) var(--lt-ease-std),
+    background var(--lt-dur-fast) var(--lt-ease-std),
+    color var(--lt-dur-fast) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model:hover .ytr-ovf-btn,
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf.is-open .ytr-ovf-btn {
+  opacity: 1 !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-btn:hover {
+  background: var(--lt-surface-2) !important;
+  color: var(--lt-text) !important;
+}
+/* The dropdown menu (built lazily on open). */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-menu {
+  position: absolute !important;
+  top: calc(100% + 6px) !important;
+  right: 0 !important;
+  z-index: 100 !important;
+  min-width: 200px !important;
+  max-height: 320px !important;
+  overflow-y: auto !important;
+  padding: var(--lt-space-1) !important;
+  background: var(--lt-surface) !important;
+  border: 1px solid var(--lt-hairline) !important;
+  border-radius: var(--lt-radius-ctl) !important;
+  box-shadow: var(--lt-shadow), var(--lt-lift) !important;
+  font-family: var(--lt-font) !important;
+  text-align: left !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-section {
+  padding: var(--lt-space-2) var(--lt-space-3) var(--lt-space-1) !important;
+  font-size: var(--lt-fs-2xs) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  color: var(--lt-text-3) !important;
+  text-transform: none !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-empty {
+  padding: var(--lt-space-2) var(--lt-space-3) !important;
+  font-size: var(--lt-fs-xs) !important;
+  color: var(--lt-text-3) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-item {
+  all: unset !important;
+  display: block !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  cursor: pointer !important;
+  padding: var(--lt-space-2) var(--lt-space-3) !important;
+  border-radius: var(--lt-radius-ctl) !important;
+  font-size: var(--lt-fs-base) !important;
+  color: var(--lt-text) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  transition: background var(--lt-dur-fast) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-item:hover {
+  background: var(--lt-accent-soft) !important;
+  color: var(--lt-accent) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-sep {
+  height: 1px !important;
+  margin: var(--lt-space-1) var(--lt-space-2) !important;
+  background: var(--lt-hairline) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-ovf-archive:hover {
+  background: var(--lt-surface-2) !important;
+  color: var(--lt-text) !important;
+}
+
+/* =====================================================================
+   7. Watched videos — dim like a "read" email
+   ---------------------------------------------------------------------
+   YouTube overlays a resume/progress bar on videos you've already played.
+   That node survives even though the thumbnail is hidden (display:none
+   removes it visually but not from the DOM), so :has() can match it and
+   fade the whole row — unwatched videos then stand out like unread mail.
+   Two selectors for the two layouts (old Polymer + new Wiz lockup).
+   Delete this block to restore full opacity for watched videos, or tune
+   the opacity value. If watched rows stop dimming, inspect a played video
+   and confirm the overlay tag names below still match the live DOM.
+   ===================================================================== */
+
+/* Old Polymer layout */
+html.yt-rework ytd-browse[page-subtype="subscriptions"]
+  ytd-rich-item-renderer:has(ytd-thumbnail-overlay-resume-playback-renderer) {
+  opacity: 0.55 !important; /* legible (~55%), never ghost-faint (Step 20) */
+}
+
+/* New Wiz / lockup layout */
+html.yt-rework ytd-browse[page-subtype="subscriptions"]
+  yt-lockup-view-model:has(yt-thumbnail-overlay-progress-bar-view-model) {
+  opacity: 0.55 !important; /* legible (~55%), never ghost-faint (Step 20) */
+}
+
+/* =====================================================================
+   11. Opened ("read") rows dim like read mail
+   ---------------------------------------------------------------------
+   content.js stamps data-ytr-read="1" on rows whose video was opened
+   (storage.local `read` map). This dims them, complementing section 7
+   (which dims partially-watched rows via the resume bar). Pure look — the
+   id stamping + read tracking is the only Subscriptions JS that remains.
+   Double-gated like everything else.
+   ===================================================================== */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer[data-ytr-read],
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[data-ytr-read] {
+  opacity: 0.55 !important; /* legible (~55%), never ghost-faint (Step 20) */
+}
+
+/* =====================================================================
+   8. Global distraction blocking (Reclaim) — site-wide, master-gated
+   ---------------------------------------------------------------------
+   Unlike sections 1-7, these rules are gated on html.yt-rework ONLY (no
+   ytd-browse[page-subtype="subscriptions"] scope) ON PURPOSE: they hide
+   noise across ALL of YouTube (home, search, watch, channel). The master
+   switch is still the gate — switch off => the yt-rework class is gone =>
+   none of these match => plain YouTube returns in full. The Shorts ROUTE
+   redirect (CSS can't change URLs) is Step 3 (JS); this step only hides
+   the Shorts surfaces. If a region stops hiding, inspect it and update the
+   tag/id below — YouTube renames these periodically.
+   ===================================================================== */
+
+/* 8a. Shorts — horizontal shelves (the "Shorts" titled rows on home, search
+   and the watch page). Each shelf element carries its OWN "Shorts" header, so
+   hiding the shelf removes the title with it — no wrapper :has() needed. We
+   deliberately do NOT :has()-match big section containers (ytd-item-section-
+   renderer / ytd-shelf-renderer): a :has() whose subject is a large, anchor-
+   dense, constantly-mutating container forces Blink to re-evaluate it on every
+   subtree change, which measurably slowed search. The new Wiz shelf
+   (grid-shelf-view-model) is shared with non-Shorts grids, so it is gated by a
+   TIGHT :has() on the shorts lockup it contains — a rare subject, so cheap.
+   Selectors mirror the maintained uBlock "hide-yt-shorts" cosmetic list. */
+html.yt-rework ytd-reel-shelf-renderer,
+html.yt-rework ytm-reel-shelf-renderer,
+html.yt-rework ytd-rich-shelf-renderer[is-shorts],
+html.yt-rework ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
+html.yt-rework grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2) {
+  display: none !important;
+}
+
+/* 8b. Shorts — individual tiles mixed into search results / grids (not inside
+   a shelf). The :has() SUBJECT is always the small per-result renderer (it
+   holds a single /shorts link or a SHORTS time-status overlay), never a big
+   section wrapper, so style invalidation stays local and cheap as YouTube
+   lazy-loads more results. Hiding the whole renderer (not just the lockup)
+   avoids leaving an empty gap. */
+html.yt-rework ytd-video-renderer:has(a[href^="/shorts/"]),
+html.yt-rework ytd-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+html.yt-rework ytd-grid-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+html.yt-rework ytd-rich-item-renderer:has(ytm-shorts-lockup-view-model),
+html.yt-rework ytd-rich-item-renderer:has(a[href^="/shorts/"]),
+html.yt-rework ytd-reel-item-renderer {
+  display: none !important;
+}
+
+/* 8c. Shorts — left sidebar (full guide) + collapsed mini-guide entries.
+   Subjects are the guide-entry tags themselves (only ~10-20 ever exist), so
+   :has() is cheap here. Anchored on BOTH the /shorts endpoint href and the
+   "Shorts" title, so a rename of one hook still leaves the other matching. */
+html.yt-rework ytd-guide-entry-renderer:has(a[href^="/shorts"]),
+html.yt-rework ytd-guide-entry-renderer:has(a[title="Shorts"]),
+html.yt-rework ytd-mini-guide-entry-renderer:has(a[href^="/shorts"]),
+html.yt-rework ytd-mini-guide-entry-renderer:has(a[title="Shorts"]),
+html.yt-rework ytd-mini-guide-entry-renderer[aria-label="Shorts"] {
+  display: none !important;
+}
+
+/* 8d. Shorts — channel-page "Shorts" tab + any remaining shorts rich sections */
+html.yt-rework yt-tab-shape[tab-title="Shorts"],
+html.yt-rework ytd-rich-section-renderer:has([is-shorts]) {
+  display: none !important;
+}
+
+/* 8e. Watch page — right-rail "up next" / suggestions */
+html.yt-rework #related,
+html.yt-rework ytd-watch-next-secondary-results-renderer {
+  display: none !important;
+}
+
+/* 8f. Watch page — comments */
+html.yt-rework #comments,
+html.yt-rework ytd-comments {
+  display: none !important;
+}
+
+/* 8g. Player — end-screen grid + in-video cards (the post-roll temptations) */
+html.yt-rework .ytp-ce-element,
+html.yt-rework .ytp-endscreen-content,
+html.yt-rework .ytp-ce-covering-overlay,
+html.yt-rework .ytp-cards-teaser {
+  display: none !important;
+}
+
+/* =====================================================================
+   9. Homepage feed neutralized (Learn — clears the slate for Step 4)
+   ---------------------------------------------------------------------
+   Double-gated: html.yt-rework + ytd-browse[page-subtype="home"], so it
+   only blanks the HOME feed and never touches search/watch/subscriptions.
+   We hide the recommendation grid (and the filter-chip bar above it) so
+   the endless grid no longer renders; Step 4 injects our own Learning
+   container into the cleared space. Master switch off => class gone =>
+   the normal home feed returns. If the home feed stops hiding, inspect
+   the home page and update the tags/ids below.
+   ===================================================================== */
+html.yt-rework ytd-browse[page-subtype="home"] ytd-rich-grid-renderer,
+html.yt-rework ytd-browse[page-subtype="home"] #contents.ytd-rich-grid-renderer,
+html.yt-rework ytd-browse[page-subtype="home"] ytd-feed-filter-chip-bar-renderer,
+html.yt-rework ytd-browse[page-subtype="home"] #chips-wrapper {
+  display: none !important;
+}
+
+/* =====================================================================
+   10·DS. Injected-UI design system — the --lt-* tokens (ONE source)
+   ---------------------------------------------------------------------
+   Every injected surface reads its color / type / space / radius /
+   shadow / motion from THESE tokens and nowhere else:
+     • the Learning home  (#yt-rework-learning, section 10)
+     • the LearnTube wordmark (section 12c, painted over YouTube's logo)
+   Defined on html.yt-rework — the master gate — so they NEVER leak onto
+   native YouTube, and theme-flipped under html.yt-rework[dark]. The
+   injected #yt-rework-learning node does NOT inherit YouTube's
+   --yt-spec-* tokens, which is exactly why we own a full set here; the
+   tokens sit on the ROOT (html.yt-rework) so the masthead ::after
+   inherits them too. One accent (system green), greyscale body, gold
+   reserved for VIP, NO YouTube red. Change a value once → every injected
+   surface follows. (DOM class/id names stay ytr-* — the JS↔CSS contract;
+   only the CSS custom-property names are --lt-*.)
+   ===================================================================== */
+html.yt-rework {
+  /* — Color (light "keynote print"; dark "Quiet" ramp overrides below) — */
+  --lt-text: #1d1d1f;
+  --lt-text-2: #515154;
+  --lt-text-3: #86868b;
+  --lt-text-4: rgba(29, 29, 31, 0.2); /* quaternary ink (doc's 20% step) */
+  --lt-surface: #ffffff;
+  --lt-surface-2: rgba(0, 0, 0, 0.04);
+  --lt-hairline: rgba(0, 0, 0, 0.08);
+  --lt-track: rgba(0, 0, 0, 0.10);
+  --lt-ring-track: rgba(0, 0, 0, 0.13);
+  --lt-accent: #1e9e50; /* the one green */
+  --lt-accent-soft: rgba(30, 158, 80, 0.12);
+  --lt-accent-soft-2: rgba(30, 158, 80, 0.20);
+  --lt-on-accent: #ffffff; /* text/glyph on a solid-accent fill */
+  --lt-gold: #ffd60a; /* ratings only (doc's --gold; one value, both themes) */
+  --lt-danger: #e0352b; /* validation errors only — system red, not brand red */
+  --lt-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 30px rgba(0, 0, 0, 0.07);
+  /* 1-px top highlight: surfaces are lit faintly from above, never floating
+     in flat black (doc's --lift; invisible on the light white surface). */
+  --lt-lift: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --lt-focus-ring: 0 0 0 4px var(--lt-accent-soft);
+
+  /* — Type (one typeface, a real scale, negative tracking, tabular nums) — */
+  --lt-font: -apple-system, "SF Pro Display", "SF Pro Text",
+    BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", sans-serif;
+  --lt-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --lt-fs-display: 46px; /* display (doc ramp top) */
+  --lt-fs-h1: 28px; /* page title — the doc's calmer Library header step */
+  --lt-fs-title: 25px; /* topic name */
+  --lt-fs-pct: 22px; /* big % readout */
+  --lt-fs-xl: 20px; /* empty-state title, wordmark */
+  --lt-fs-lg: 17px; /* subtitle */
+  --lt-fs-md: 15.5px; /* playlist name */
+  --lt-fs-base: 15px; /* body / input / button / continue */
+  --lt-fs-sm: 14px; /* lecture count */
+  --lt-fs-xs: 13px; /* tools, error */
+  --lt-fs-2xs: 12.5px; /* playlist sub */
+  --lt-fs-3xs: 11.5px; /* id (mono) */
+  --lt-track-tight: -0.01em;
+  --lt-track-tighter: -0.02em;
+  --lt-track-display: -0.03em;
+  --lt-leading-tight: 1.04;
+  --lt-leading-body: 1.45;
+
+  /* — Space (the layout rhythm) — */
+  --lt-space-1: 4px;
+  --lt-space-2: 8px;
+  --lt-space-3: 12px;
+  --lt-space-4: 16px;
+  --lt-space-5: 22px;
+  --lt-space-6: 28px;
+  --lt-space-7: 56px;
+  --lt-gutter: 24px; /* page side padding */
+  --lt-maxw: 700px; /* reading column */
+
+  /* — Radius (the doc's three radii — ctl 12 / card 18 / pill ∞) — */
+  --lt-radius-ctl: 12px; /* controls, inputs, menus, rows */
+  --lt-radius-card: 18px; /* cards, hero, rails */
+  --lt-radius-pill: 999px;
+  --lt-radius-round: 50%; /* circles (rings, marks) — geometry */
+
+  /* — Motion (one curve, one duration, then stillness) — */
+  --lt-ease: cubic-bezier(0.32, 0.72, 0, 1); /* the one curve (doc --ease) */
+  --lt-ease-std: cubic-bezier(0.32, 0.72, 0, 1); /* alias — same curve everywhere */
+  --lt-dur-fast: 0.18s; /* alias — the one 180ms duration */
+  --lt-dur-med: 0.18s;
+}
+html.yt-rework[dark] {
+  /* The doc's dark-first "Quiet" ramp — these are the specimen values. */
+  --lt-text: #f5f5f7;
+  --lt-text-2: rgba(235, 235, 245, 0.62);
+  --lt-text-3: rgba(235, 235, 245, 0.34);
+  --lt-text-4: rgba(235, 235, 245, 0.2);
+  --lt-surface: #161619; /* cards, rows, inputs */
+  --lt-surface-2: #232328; /* raised — secondary buttons, hover washes */
+  --lt-hairline: rgba(255, 255, 255, 0.07);
+  --lt-track: rgba(255, 255, 255, 0.12); /* the stronger hairline (doc --hair-2) */
+  --lt-ring-track: rgba(255, 255, 255, 0.12);
+  --lt-accent: #30d158; /* system green, dark */
+  --lt-accent-soft: rgba(48, 209, 88, 0.16);
+  --lt-accent-soft-2: rgba(48, 209, 88, 0.26);
+  --lt-on-accent: #06210e; /* deep green-black on the bright green */
+  --lt-shadow: 0 1px 2px rgba(0, 0, 0, 0.30), 0 12px 32px rgba(0, 0, 0, 0.22);
+  --lt-danger: #ff453a; /* system red, dark */
+}
+
+/* =====================================================================
+   10. Learning home — injected #yt-rework-learning shell ("the Library")
+   ---------------------------------------------------------------------
+   content.js mounts a single <div id="yt-rework-learning"> into the home
+   browse column (section 9 hid the native feed). As of Step 21 this is
+   THE LIBRARY (doc §03): a "Library" header with the reconciling
+   "N topics · X of Y lectures" sub, one quiet Continue row (the global
+   deterministic next lecture, real title, whole row a deep-link), and the
+   ONE card grid — per topic: name · slim accent progress bar ·
+   "N of M lectures" · Resume/Start — always closed by the dashed
+   "+ New topic" add-tile. Zero topics → the guided first-run empty state.
+   No hero box, no conic rings on this surface, no momentum line.
+
+   Aesthetic: "Quiet" (dark-first, Apple-material). One accent (system
+   green) used for progress + the one primary action; neutral card
+   surfaces (no background tint) with hairline borders, soft float shadows
+   and the --lt-lift 1-px top highlight; SF Pro with tuned negative
+   tracking; one orchestrated staggered page-load (guarded by .ytr-animate
+   so data refreshes don't replay it). Every value here comes from the
+   shared --lt-* design tokens defined in section 10·DS above (theme-
+   flipped on html[dark]); no palette/scale literal lives in this section —
+   only intrinsic geometry stays numeric, each noted. Gated on
+   html.yt-rework ONLY (master gate); the root only exists on the home
+   route. Class names are namespaced ytr-* to avoid clashes.
+   ===================================================================== */
+html.yt-rework #yt-rework-learning {
+  position: relative;
+  z-index: 0;
+  box-sizing: border-box;
+  max-width: var(--lt-maxw);
+  margin: 0 auto;
+  padding: 0 var(--lt-gutter) 120px;
+  font-family: var(--lt-font);
+  color: var(--lt-text);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* --- Page header ("Library" + the reconciling counts) -------------------- */
+html.yt-rework #yt-rework-learning .ytr-head {
+  padding: var(--lt-space-7) var(--lt-space-1) var(--lt-space-5);
+}
+html.yt-rework #yt-rework-learning .ytr-title {
+  margin: 0;
+  font-size: var(--lt-fs-h1);
+  line-height: var(--lt-leading-tight);
+  font-weight: 700;
+  letter-spacing: var(--lt-track-display);
+  color: var(--lt-text);
+}
+html.yt-rework #yt-rework-learning .ytr-subtitle {
+  margin: var(--lt-space-1) 0 0;
+  font-size: var(--lt-fs-sm);
+  line-height: var(--lt-leading-body);
+  font-weight: 400;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* =====================================================================
+   THE LIBRARY (Step 21) — quiet Continue row + the one card grid closed
+   by the "+ New topic" add-tile. Replaces the Step-12 Desk (hero box,
+   conic rings, momentum whisper, folded per-card playlist rows — all
+   gone). Every value is a --lt-* token except intrinsic layout geometry
+   (each tagged). Dark/light follows the tokens.
+   ===================================================================== */
+
+/* --- The quiet Continue row (whole row = one deep-link) ------------------ */
+html.yt-rework #yt-rework-learning .ytr-continue {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-4);
+  margin-bottom: var(--lt-space-4);
+  padding: var(--lt-space-4);
+  border: 1px solid var(--lt-hairline);
+  border-radius: var(--lt-radius-ctl);
+  /* Neutral surface, lit faintly from above — no background tint. */
+  background: var(--lt-surface);
+  box-shadow: var(--lt-lift);
+  text-decoration: none;
+  color: inherit;
+  transition: transform var(--lt-dur-med) var(--lt-ease),
+    border-color var(--lt-dur-med) var(--lt-ease);
+}
+html.yt-rework #yt-rework-learning .ytr-continue:hover {
+  transform: translateY(-1px); /* geometry, not a token */
+  border-color: var(--lt-track);
+}
+html.yt-rework #yt-rework-learning .ytr-cont-play {
+  flex: none;
+  width: 38px; /* geometry, not a token */
+  height: 38px; /* geometry, not a token */
+  border-radius: var(--lt-radius-round);
+  background: var(--lt-accent-soft);
+  border: 1px solid var(--lt-accent-soft-2);
+  color: var(--lt-accent);
+  display: grid;
+  place-items: center;
+  font-size: var(--lt-fs-sm);
+}
+html.yt-rework #yt-rework-learning .ytr-cont-main {
+  flex: 1;
+  min-width: 0;
+}
+html.yt-rework #yt-rework-learning .ytr-cont-eyebrow {
+  display: block;
+  font-size: var(--lt-fs-3xs);
+  font-weight: 600;
+  letter-spacing: 0.1em; /* geometry (tracking for caps), not a token */
+  text-transform: uppercase;
+  color: var(--lt-accent);
+}
+html.yt-rework #yt-rework-learning .ytr-cont-title {
+  display: block;
+  margin-top: 2px; /* geometry, not a token */
+  font-size: var(--lt-fs-sm);
+  font-weight: 600;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.yt-rework #yt-rework-learning .ytr-cont-sub {
+  display: block;
+  margin-top: 1px; /* geometry, not a token */
+  font-size: var(--lt-fs-2xs);
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.yt-rework #yt-rework-learning .ytr-cont-go {
+  flex: none;
+  font-size: var(--lt-fs-xs);
+  font-weight: 600;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-accent);
+}
+
+/* --- The slim progress bar (the doc's .bar — track + accent fill) -------- */
+html.yt-rework #yt-rework-learning .ytr-bar {
+  height: 4px; /* geometry, not a token */
+  border-radius: var(--lt-radius-pill);
+  background: var(--lt-track);
+  overflow: hidden;
+}
+html.yt-rework #yt-rework-learning .ytr-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--lt-accent);
+  border-radius: var(--lt-radius-pill);
+  transition: width var(--lt-dur-med) var(--lt-ease);
+}
+
+/* --- Responsive topic-card grid (NEVER a full-width box) ----------------- */
+html.yt-rework #yt-rework-learning .ytr-grid {
+  display: grid;
+  /* 260px min keeps each topic a CARD; auto-fill reflows 1↔2+ columns. The
+     min is intrinsic layout geometry (the token ramp has no breakpoint). */
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); /* geometry, not a token */
+  gap: var(--lt-space-4);
+}
+html.yt-rework #yt-rework-learning .ytr-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 128px; /* geometry (the mock's card height), not a token */
+  background: var(--lt-surface);
+  border: 1px solid var(--lt-hairline);
+  border-radius: var(--lt-radius-card);
+  padding: var(--lt-space-5);
+  box-shadow: var(--lt-shadow), var(--lt-lift);
+  cursor: pointer; /* the whole card opens the course view */
+  transition: transform var(--lt-dur-med) var(--lt-ease),
+    border-color var(--lt-dur-med) var(--lt-ease),
+    background var(--lt-dur-med) var(--lt-ease),
+    box-shadow var(--lt-dur-med) var(--lt-ease);
+}
+html.yt-rework #yt-rework-learning .ytr-card:hover {
+  transform: translateY(-2px); /* geometry, not a token */
+  border-color: var(--lt-track);
+  background: var(--lt-surface-2);
+}
+html.yt-rework #yt-rework-learning .ytr-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lt-space-2);
+}
+html.yt-rework #yt-rework-learning .ytr-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--lt-fs-md);
+  font-weight: 600;
+  letter-spacing: var(--lt-track-tighter);
+  color: var(--lt-text);
+  line-height: 1.25; /* geometry, not a token */
+  overflow-wrap: anywhere;
+}
+
+/* The hover ··· overflow (rename / delete) + its dropdown menu. */
+html.yt-rework #yt-rework-learning .ytr-card-ovf {
+  position: relative;
+  flex: none;
+}
+html.yt-rework #yt-rework-learning .ytr-card-ovf-btn {
+  border: 0;
+  background: transparent;
+  padding: 0 var(--lt-space-1); /* geometry, not a token */
+  font-family: inherit;
+  font-size: var(--lt-fs-base);
+  line-height: 1;
+  color: var(--lt-text-3);
+  cursor: pointer;
+  opacity: 0; /* hidden until the card is hovered/focused */
+  transition: opacity var(--lt-dur-med) var(--lt-ease),
+    color var(--lt-dur-med) var(--lt-ease);
+}
+html.yt-rework #yt-rework-learning .ytr-card:hover .ytr-card-ovf-btn,
+html.yt-rework #yt-rework-learning .ytr-card:focus-within .ytr-card-ovf-btn,
+html.yt-rework #yt-rework-learning .ytr-card-ovf.is-open .ytr-card-ovf-btn {
+  opacity: 1;
+}
+html.yt-rework #yt-rework-learning .ytr-card-ovf-btn:hover {
+  color: var(--lt-text);
+}
+html.yt-rework #yt-rework-learning .ytr-card-menu {
+  position: absolute;
+  top: calc(100% + 4px); /* geometry, not a token */
+  right: 0;
+  z-index: 5; /* above sibling cards — geometry, not a token */
+  min-width: 120px; /* geometry, not a token */
+  padding: var(--lt-space-1);
+  background: var(--lt-surface);
+  border: 1px solid var(--lt-hairline);
+  border-radius: var(--lt-radius-ctl);
+  box-shadow: var(--lt-shadow), var(--lt-lift);
+}
+html.yt-rework #yt-rework-learning .ytr-card-menu-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 7px 11px; /* geometry, not a token */
+  text-align: left;
+  font-family: inherit;
+  font-size: var(--lt-fs-xs);
+  font-weight: 500;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text-2);
+  border-radius: calc(var(--lt-radius-ctl) - 4px); /* nested radius geometry */
+  cursor: pointer;
+  transition: background var(--lt-dur-med) var(--lt-ease),
+    color var(--lt-dur-med) var(--lt-ease);
+}
+html.yt-rework #yt-rework-learning .ytr-card-menu-item:hover {
+  background: var(--lt-surface-2);
+  color: var(--lt-text);
+}
+
+/* Spacer keeps name / bar / stat in the mock's vertical rhythm. */
+html.yt-rework #yt-rework-learning .ytr-card-sp {
+  flex: 1;
+  min-height: 18px; /* geometry, not a token */
+}
+
+/* Stat line: count left, the one way in right. */
+html.yt-rework #yt-rework-learning .ytr-card-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lt-space-2);
+  margin-top: var(--lt-space-3);
+}
+html.yt-rework #yt-rework-learning .ytr-card-count {
+  font-size: var(--lt-fs-2xs);
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text-2);
+  font-variant-numeric: tabular-nums;
+}
+html.yt-rework #yt-rework-learning .ytr-card-go {
+  flex: none;
+  font-size: var(--lt-fs-xs);
+  font-weight: 600;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-accent);
+  text-decoration: none;
+}
+html.yt-rework #yt-rework-learning .ytr-card-go:hover {
+  text-decoration: underline;
+}
+html.yt-rework #yt-rework-learning .ytr-card-go.is-done {
+  color: var(--lt-text-3);
+}
+
+/* --- The dashed "+ New topic" add-tile (always closes the grid) ---------- */
+html.yt-rework #yt-rework-learning .ytr-add-tile {
+  align-items: center;
+  justify-content: center;
+  flex-direction: row;
+  gap: var(--lt-space-2);
+  border-style: dashed;
+  border-color: var(--lt-track);
+  background: transparent;
+  box-shadow: none;
+  color: var(--lt-text-3);
+  font-size: var(--lt-fs-sm);
+  font-weight: 500;
+  letter-spacing: var(--lt-track-tight);
+}
+html.yt-rework #yt-rework-learning .ytr-add-tile:hover {
+  transform: none;
+  background: var(--lt-surface);
+  border-color: var(--lt-track);
+  color: var(--lt-text-2);
+}
+html.yt-rework #yt-rework-learning .ytr-add-tile-plus {
+  font-size: 22px; /* geometry (glyph), not a token */
+  line-height: 1;
+}
+/* Expanded: the inline name input + Create fills the tile. */
+html.yt-rework #yt-rework-learning .ytr-add-tile.is-open {
+  cursor: default;
+  align-items: stretch;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* --- Inline inputs (add module in the course view / add-tile / empty) ---- */
+html.yt-rework #yt-rework-learning .ytr-add-pl-row,
+html.yt-rework #yt-rework-learning .ytr-add-topic-row {
+  display: flex;
+  align-items: center;
+  gap: 9px; /* geometry, not a token */
+  flex-wrap: wrap;
+}
+html.yt-rework #yt-rework-learning .ytr-add-pl-row {
+  margin-top: var(--lt-space-4);
+  padding: 0 2px; /* geometry, not a token */
+}
+/* Inside the empty state / the add-tile, the row needs no extra offset. */
+html.yt-rework #yt-rework-learning .ytr-empty-add .ytr-add-pl-row,
+html.yt-rework #yt-rework-learning .ytr-add-tile .ytr-add-topic-row {
+  margin-top: 0;
+}
+html.yt-rework #yt-rework-learning .ytr-input {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: 11px 15px; /* geometry, not a token */
+  font: inherit;
+  font-size: var(--lt-fs-base);
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text);
+  background: var(--lt-surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--lt-radius-ctl);
+  box-shadow: var(--lt-lift);
+  transition: border-color var(--lt-dur-med) var(--lt-ease-std),
+    box-shadow var(--lt-dur-med) var(--lt-ease-std),
+    background var(--lt-dur-med) var(--lt-ease-std);
+}
+html.yt-rework #yt-rework-learning .ytr-input::placeholder {
+  color: var(--lt-text-3);
+}
+html.yt-rework #yt-rework-learning .ytr-input:focus {
+  outline: none;
+  background: var(--lt-surface);
+  border-color: var(--lt-accent);
+  box-shadow: var(--lt-focus-ring), var(--lt-lift);
+}
+html.yt-rework #yt-rework-learning .ytr-btn {
+  font: inherit;
+  font-size: var(--lt-fs-base);
+  font-weight: 600;
+  letter-spacing: var(--lt-track-tight);
+  padding: 11px 20px; /* geometry, not a token */
+  cursor: pointer;
+  color: var(--lt-accent);
+  background: var(--lt-accent-soft);
+  border: 0;
+  border-radius: var(--lt-radius-ctl);
+  transition: background var(--lt-dur-med) var(--lt-ease-std),
+    transform var(--lt-dur-fast) var(--lt-ease-std);
+}
+html.yt-rework #yt-rework-learning .ytr-btn:hover {
+  background: var(--lt-accent-soft-2);
+}
+html.yt-rework #yt-rework-learning .ytr-btn:active {
+  transform: scale(0.97);
+}
+html.yt-rework #yt-rework-learning .ytr-err {
+  font-size: var(--lt-fs-xs);
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-danger);
+  flex-basis: 100%;
+  padding: 0 2px; /* geometry, not a token */
+}
+html.yt-rework #yt-rework-learning .ytr-err:empty {
+  display: none;
+}
+
+/* --- First-run empty state (▷ · one sentence · one input) ---------------- */
+html.yt-rework #yt-rework-learning .ytr-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--lt-space-3);
+  max-width: 460px; /* geometry (the mock's column), not a token */
+  margin: var(--lt-space-7) auto 0;
+  padding: var(--lt-space-6) 0;
+  text-align: center;
+}
+html.yt-rework #yt-rework-learning .ytr-empty-glyph {
+  width: 60px; /* geometry, not a token */
+  height: 60px; /* geometry, not a token */
+  border-radius: var(--lt-radius-card);
+  border: 1px solid var(--lt-track);
+  background: var(--lt-surface);
+  box-shadow: var(--lt-lift);
+  display: grid;
+  place-items: center;
+  font-size: 26px; /* geometry (glyph), not a token */
+  color: var(--lt-text-3);
+}
+html.yt-rework #yt-rework-learning .ytr-empty-title {
+  margin-top: var(--lt-space-1);
+  font-size: var(--lt-fs-xl);
+  font-weight: 700;
+  letter-spacing: var(--lt-track-tighter);
+  color: var(--lt-text);
+}
+html.yt-rework #yt-rework-learning .ytr-empty-sub {
+  margin: 0 auto;
+  max-width: 38ch; /* geometry (measure), not a token */
+  font-size: var(--lt-fs-xs);
+  line-height: 1.55; /* geometry, not a token */
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text-2);
+}
+html.yt-rework #yt-rework-learning .ytr-empty-add {
+  width: 100%;
+  max-width: 420px; /* geometry, not a token */
+  margin-top: var(--lt-space-2);
+}
+
+/* --- Step 13: drag-to-reorder (the ⋮⋮ grip, ghost, drop indicator) -------
+       The grip is the only draggable element (content.js sets draggable on it),
+       so cards keep native behavior. Step 21: topic cards only — the playlist
+       rows left the Library. All tokens, all gated on the master class +
+       Learning root, so nothing leaks off the home route. ------------------ */
+
+/* The ⋮⋮ handle: quiet until you hover the card, then grabbable. */
+html.yt-rework #yt-rework-learning .ytr-grip {
+  flex: 0 0 auto;
+  align-self: center;
+  cursor: grab;
+  color: var(--lt-text-3);
+  font-size: var(--lt-fs-sm);
+  line-height: 1;
+  letter-spacing: -0.18em; /* geometry: tighten the two-dot columns */
+  padding: 0 var(--lt-space-1);
+  margin-right: var(--lt-space-1);
+  border-radius: var(--lt-radius-ctl);
+  opacity: 0; /* hidden until the surface is hovered/focused */
+  transition: opacity var(--lt-dur-fast) var(--lt-ease),
+    color var(--lt-dur-fast) var(--lt-ease);
+  user-select: none;
+  touch-action: none;
+}
+html.yt-rework #yt-rework-learning .ytr-card:hover .ytr-grip,
+html.yt-rework #yt-rework-learning .ytr-card:focus-within .ytr-grip {
+  opacity: 0.5;
+}
+html.yt-rework #yt-rework-learning .ytr-grip:hover {
+  opacity: 1;
+  color: var(--lt-text-2);
+}
+html.yt-rework #yt-rework-learning .ytr-grip:active {
+  cursor: grabbing;
+}
+
+/* The card being dragged: a faded, slightly shrunk ghost. */
+html.yt-rework #yt-rework-learning .ytr-card.is-dragging {
+  opacity: 0.4;
+  transform: scale(0.98);
+}
+
+/* Insertion line: a thin accent rule on the leading/trailing edge of the
+   candidate card the dragged one would land next to. Drawn with box-shadow so
+   it never shifts layout. */
+html.yt-rework #yt-rework-learning .ytr-drop-before {
+  box-shadow: inset 0 2px 0 0 var(--lt-accent);
+}
+html.yt-rework #yt-rework-learning .ytr-drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--lt-accent);
+}
+
+/* --- Orchestrated page-load (guarded by .ytr-animate; removed after the
+       first second so data-driven re-renders never replay it) ------------- */
+@keyframes ytr-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* The Library's bands rise in sequence: header → Continue (or the empty
+   state) → each grid card (the add-tile rises as a grid child). */
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-head,
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-continue,
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-empty,
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-grid > * {
+  animation: ytr-rise 0.6s var(--lt-ease) both;
+}
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-continue,
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-empty {
+  animation-delay: 0.06s;
+}
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-grid > *:nth-child(1) {
+  animation-delay: 0.12s;
+}
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-grid > *:nth-child(2) {
+  animation-delay: 0.16s;
+}
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-grid > *:nth-child(3) {
+  animation-delay: 0.2s;
+}
+html.yt-rework #yt-rework-learning.ytr-animate .ytr-grid > *:nth-child(n + 4) {
+  animation-delay: 0.24s;
+}
+
+/* =====================================================================
+   THE COURSE VIEW (Step 14, rebuilt Step 22) — a topic opened into
+   modules + lectures. An alternate render of the SAME injected root
+   (currentTopicId in content.js): a "‹ Library" back row, then the
+   header — name · "N of M lectures completed" · a SLIM PROGRESS BAR
+   (the Library's .ytr-bar; the conic ring is gone) · ONE primary
+   "▷ Resume" with a real-title hint beneath — over hairline-separated
+   modules (playlists), each a checklist of whole-row deep-link lectures
+   (mark + real title + duration). No note inputs, no Premium buttons
+   (doc §05 killed non-goals). Every value is a --lt-* token except
+   intrinsic geometry (each tagged). Dark/light follows the tokens; the
+   universal prefers-reduced-motion rule below neutralizes these
+   transitions. Gated by the master class + the root only exists on the
+   home route.
+   ===================================================================== */
+
+/* --- "‹ Library" back row (above the header, per the mock) --------------- */
+html.yt-rework #yt-rework-learning .ytr-course-back-row {
+  padding: var(--lt-space-6) var(--lt-space-1) 0;
+}
+html.yt-rework #yt-rework-learning .ytr-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* geometry, not a token */
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--lt-text-2);
+  font-family: inherit;
+  font-size: var(--lt-fs-xs);
+  font-weight: 500;
+  letter-spacing: var(--lt-track-tight);
+  cursor: pointer;
+  transition: color var(--lt-dur-med) var(--lt-ease-std);
+}
+html.yt-rework #yt-rework-learning .ytr-back:hover {
+  color: var(--lt-text);
+}
+
+/* --- Course header: name / count / slim bar · Resume + hint -------------- */
+html.yt-rework #yt-rework-learning .ytr-course-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--lt-space-5);
+  padding: var(--lt-space-4) var(--lt-space-1) var(--lt-space-5);
+}
+html.yt-rework #yt-rework-learning .ytr-course-id {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+html.yt-rework #yt-rework-learning .ytr-course-name {
+  margin: 0;
+  font-size: var(--lt-fs-title);
+  line-height: var(--lt-leading-tight);
+  font-weight: 700;
+  letter-spacing: var(--lt-track-display);
+  color: var(--lt-text);
+}
+html.yt-rework #yt-rework-learning .ytr-course-count {
+  margin-top: var(--lt-space-1);
+  font-size: var(--lt-fs-sm);
+  font-weight: 400;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text-2);
+  font-variant-numeric: tabular-nums;
+}
+/* The slim header progress bar — reuses the Library's .ytr-bar recipe. */
+html.yt-rework #yt-rework-learning .ytr-course-bar {
+  margin-top: var(--lt-space-3);
+  max-width: 440px; /* geometry (the mock's measure), not a token */
+}
+
+/* ONE primary Resume (right) + the real-title hint beneath it. */
+html.yt-rework #yt-rework-learning .ytr-resume-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--lt-space-2);
+  flex-shrink: 0;
+}
+html.yt-rework #yt-rework-learning .ytr-resume-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px; /* geometry, not a token */
+  height: 42px; /* geometry (the mock's control height), not a token */
+  padding: 0 22px; /* geometry, not a token */
+  border-radius: var(--lt-radius-ctl);
+  background: var(--lt-accent);
+  color: var(--lt-on-accent);
+  font-size: var(--lt-fs-base);
+  font-weight: 700;
+  letter-spacing: var(--lt-track-tight);
+  white-space: nowrap;
+  text-decoration: none;
+  transition: filter var(--lt-dur-med) var(--lt-ease-std),
+    transform var(--lt-dur-fast) var(--lt-ease-std);
+}
+html.yt-rework #yt-rework-learning .ytr-resume-btn:hover {
+  filter: brightness(1.06); /* geometry, not a token */
+}
+html.yt-rework #yt-rework-learning .ytr-resume-btn:active {
+  transform: scale(0.97); /* geometry, not a token */
+}
+/* No-resume state: a calm, non-linking "Completed" marker. */
+html.yt-rework #yt-rework-learning .ytr-resume-btn.is-disabled {
+  background: var(--lt-accent-soft);
+  color: var(--lt-accent);
+  font-weight: 600;
+  cursor: default;
+}
+html.yt-rework #yt-rework-learning .ytr-resume-hint {
+  max-width: 280px; /* geometry (the mock's measure), not a token */
+  text-align: right;
+  font-size: var(--lt-fs-2xs);
+  line-height: 1.4; /* geometry, not a token */
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text-3);
+}
+
+/* --- Modules — one per playlist, hairline-separated ("never a merged
+       blur") -------------------------------------------------------------- */
+html.yt-rework #yt-rework-learning .ytr-modules {
+  margin-top: var(--lt-space-2);
+}
+html.yt-rework #yt-rework-learning .ytr-module {
+  border-top: 1px solid var(--lt-hairline);
+  margin-top: var(--lt-space-6);
+  padding-top: var(--lt-space-5);
+}
+html.yt-rework #yt-rework-learning .ytr-module-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--lt-space-3);
+  margin-bottom: var(--lt-space-3);
+}
+html.yt-rework #yt-rework-learning .ytr-module-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--lt-fs-md);
+  font-weight: 600;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text);
+}
+html.yt-rework #yt-rework-learning .ytr-module-meta {
+  flex-shrink: 0;
+  font-size: var(--lt-fs-2xs);
+  color: var(--lt-text-3);
+  font-variant-numeric: tabular-nums;
+}
+html.yt-rework #yt-rework-learning .ytr-module-count {
+  color: var(--lt-text-3);
+}
+html.yt-rework #yt-rework-learning .ytr-module-open {
+  font-size: var(--lt-fs-xs);
+  font-weight: 600;
+  color: var(--lt-accent);
+  text-decoration: none;
+}
+html.yt-rework #yt-rework-learning .ytr-module-open:hover {
+  text-decoration: underline;
+}
+html.yt-rework #yt-rework-learning .ytr-module-empty {
+  padding: var(--lt-space-3) var(--lt-space-1);
+  font-size: var(--lt-fs-sm);
+  color: var(--lt-text-3);
+}
+
+/* --- Lecture checklist — every row is ONE deep-link: mark + real title +
+       duration. No notes, no id strings (Step 22). --------------------------- */
+html.yt-rework #yt-rework-learning .ytr-lec-list {
+  display: flex;
+  flex-direction: column;
+}
+html.yt-rework #yt-rework-learning .ytr-lec {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+  padding: var(--lt-space-2) var(--lt-space-2);
+  border-radius: var(--lt-radius-ctl);
+  text-decoration: none;
+  transition: background var(--lt-dur-med) var(--lt-ease-std);
+}
+html.yt-rework #yt-rework-learning .ytr-lec:hover {
+  background: var(--lt-surface-2);
+}
+/* Watched mark: solid-accent ✓ when done, an accent ring + dot when partial,
+   a hairline empty circle otherwise. Disc sizes are geometry; color via
+   tokens. */
+html.yt-rework #yt-rework-learning .ytr-lec-mark {
+  flex-shrink: 0;
+  width: 18px; /* geometry, not a token */
+  height: 18px; /* geometry, not a token */
+  border-radius: var(--lt-radius-round);
+  border: 1.5px solid var(--lt-track); /* geometry, not a token */
+  display: grid;
+  place-items: center;
+  font-size: var(--lt-fs-3xs);
+  font-weight: 700;
+  line-height: 1;
+}
+html.yt-rework #yt-rework-learning .ytr-lec-mark.is-done {
+  border-color: var(--lt-accent);
+  background: var(--lt-accent);
+  color: var(--lt-on-accent);
+}
+html.yt-rework #yt-rework-learning .ytr-lec-mark.is-partial {
+  border-color: var(--lt-accent);
+}
+html.yt-rework #yt-rework-learning .ytr-lec-mark.is-partial::after {
+  content: "";
+  width: 8px; /* geometry, not a token */
+  height: 8px; /* geometry, not a token */
+  border-radius: var(--lt-radius-round);
+  background: var(--lt-accent);
+}
+/* The real scraped title — the row's one line, ellipsized. */
+html.yt-rework #yt-rework-learning .ytr-lec-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--lt-fs-sm);
+  font-weight: 500;
+  letter-spacing: var(--lt-track-tight);
+  color: var(--lt-text);
+}
+html.yt-rework #yt-rework-learning .ytr-lec:hover .ytr-lec-title {
+  color: var(--lt-accent);
+}
+/* A finished lecture reads quieter (mark stays the loud signal). */
+html.yt-rework #yt-rework-learning .ytr-lec.is-done .ytr-lec-title {
+  color: var(--lt-text-2);
+}
+/* The scraped duration label ("14:02") — quiet, tabular, right edge. */
+html.yt-rework #yt-rework-learning .ytr-lec-dur {
+  flex-shrink: 0;
+  font-size: var(--lt-fs-2xs);
+  color: var(--lt-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Empty course (no playlists yet). */
+html.yt-rework #yt-rework-learning .ytr-course-empty {
+  margin-top: var(--lt-space-6);
+  padding: var(--lt-space-6) var(--lt-space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.yt-rework #yt-rework-learning *,
+  html.yt-rework #yt-rework-learning *::before,
+  html.yt-rework #yt-rework-learning *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* =====================================================================
+   12. Reclaim the masthead (LearnTube) — site-wide, master-gated
+   ---------------------------------------------------------------------
+   Single-gated html.yt-rework ONLY (no page-subtype), like section 8:
+   the top bar (ytd-masthead) is shared by every YouTube page. The master
+   switch is still the gate — switch off => the yt-rework class is gone =>
+   none of these match => YouTube's FULL native bar (Create, bell, the
+   real logo, the country code) returns instantly. Strips the bar down to
+   [mark · search · account] per the Reclaim pillar.
+
+   The Shorts GUIDE / mini-guide entry is already removed by section 8c
+   (it targets ytd-guide-entry-renderer / ytd-mini-guide-entry-renderer for
+   the /shorts endpoint), so it is NOT repeated here.
+
+   The LearnTube wordmark is CSS-only: ytd-masthead persists across SPA
+   navigation (it is never replaced, like <html>), so the logo is present
+   from document_start and never re-created — no JS mount/teardown needed.
+   We hide YouTube's logo glyph and paint "LearnTube" with a ::after on the
+   logo container (generated content = a CSS literal, so no DOM injection,
+   no XSS). The anchor underneath is kept, so clicking the mark still goes
+   home (the Learning desk). If a region stops hiding / the wordmark
+   mis-overlays, inspect ytd-masthead and update the tags/aria below.
+   ===================================================================== */
+
+/* 12a. Create button — a producer affordance, not a learner's. OR-ed across
+   the forms YouTube has shipped (icon button, pill, menu-button wrapper);
+   whichever the live build uses matches, the rest select nothing. The legacy
+   #create id is the design doc's own example selector. */
+html.yt-rework ytd-masthead ytd-button-renderer#create,
+html.yt-rework ytd-masthead #create-icon,
+html.yt-rework ytd-masthead button[aria-label="Create"],
+html.yt-rework ytd-masthead ytd-topbar-menu-button-renderer:has(button[aria-label="Create"]),
+html.yt-rework ytd-masthead yt-button-shape:has(button[aria-label="Create"]) {
+  display: none !important;
+}
+
+/* 12b. Notification bell — a red-badge attention magnet (purpose-named tag,
+   stable). Removed whole, badge and all. */
+html.yt-rework ytd-masthead ytd-notification-topbar-button-renderer {
+  display: none !important;
+}
+
+/* 12c. LearnTube wordmark over YouTube's logo. Keep the anchor's hit area
+   (click still goes home) — only its glyph is hidden via visibility (not
+   display, which would collapse the box the ::after sits over). */
+html.yt-rework ytd-masthead ytd-topbar-logo-renderer #logo {
+  position: relative !important;
+}
+html.yt-rework ytd-masthead ytd-topbar-logo-renderer #logo ytd-logo,
+html.yt-rework ytd-masthead ytd-topbar-logo-renderer #logo #logo-icon,
+html.yt-rework ytd-masthead ytd-topbar-logo-renderer #logo svg {
+  visibility: hidden !important;
+}
+html.yt-rework ytd-masthead ytd-topbar-logo-renderer #logo::after {
+  content: "LearnTube";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  /* From the shared design system (section 10·DS) — the brand mark is on the
+     same SF Pro type + --lt-text color as every other injected surface, not
+     YouTube's --yt-spec-* (which we deliberately never depend on). --lt-* is
+     defined on the root html.yt-rework, so this ::after inherits it. */
+  font-family: var(--lt-font);
+  font-size: var(--lt-fs-xl);
+  font-weight: 700;
+  letter-spacing: var(--lt-track-tighter);
+  color: var(--lt-text);
+  pointer-events: none; /* the anchor underneath still gets the click -> home */
+}
+
+/* 12d. Drop the "IN"/"US" country-code superscript so the mark reads cleanly
+   as just "LearnTube". */
+html.yt-rework ytd-masthead #country-code {
+  display: none !important;
+}
+
+/* =====================================================================
+   13. The Inbox, refined (Step 15; corrected Step 20) — header, VIP
+       filter, archived hiding
+   ---------------------------------------------------------------------
+   The injected Subscriptions header (#ytr-subs-header: "Subscriptions"
+   title + "★ VIP" toggle — Step 20 deleted the unread badge: "No unread
+   counter, no badges") and the two display-only row filters: the VIP
+   filter (when data-ytr-vip is set on <html>, hide every row whose
+   channel rating is < 4) and archived-row hiding (data-ytr-archived). All injected /
+   row-layout rules are DOUBLE-GATED with the page-subtype scope so they
+   never touch another page; injected-UI surfaces use the shared --lt-*
+   tokens (theme-aware). content.js stamps data-ytr-star (rating 0..5),
+   data-ytr-archived, and flips data-ytr-vip on <html>. The VIP filter and
+   archive hide are pure display:none — they NEVER reorder the feed.
+   ===================================================================== */
+
+/* 13a. The injected header bar (Subscriptions · ★ VIP). */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #ytr-subs-header {
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--lt-space-3) !important;
+  margin: 0 0 var(--lt-space-2) !important; /* tightened from --lt-space-4: too much air under the title */
+  padding: var(--lt-space-2) 0 0 !important; /* no bottom padding — the margin is the only gap */
+  font-family: var(--lt-font) !important;
+}
+/* The Bug-2 fix moved this header OUT of the grid's #contents to the grid's
+   parent, so the grid (which immediately follows the header now) brings its own
+   top spacing — zero it so the header doesn't stack extra air above row one. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #ytr-subs-header + ytd-rich-grid-renderer {
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+/* The residual gap below the header is YouTube's own chrome INSIDE the grid: the
+   (empty) filter-chip / #header slot and the #contents top padding. Collapse the
+   chrome slot and zero #contents' top padding so the first row sits flush under
+   the header. We NEVER hide #contents itself — only its top padding — so the
+   feed can't be blanked. (Mirrors section 9, which hides the chip bar on home.) */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-grid-renderer > #header,
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-feed-filter-chip-bar-renderer {
+  display: none !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-grid-renderer > #contents {
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #ytr-subs-header .ytr-subs-title {
+  font-size: var(--lt-fs-title) !important;
+  font-weight: 700 !important;
+  letter-spacing: var(--lt-track-display) !important;
+  color: var(--lt-text) !important;
+}
+/* The VIP toggle button — pill, gold when pressed (VIP gold, like the stars).
+   Sits snug after the title on the LEFT (the header's flex gap is the only
+   spacing): NO margin-left:auto — the Bug-2 fix moved the header to the grid's
+   full-width parent, so margin-left:auto flung the toggle to the page's far
+   right edge, away from the title. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #ytr-subs-header .ytr-vip-toggle {
+  all: unset !important;
+  cursor: pointer !important;
+  padding: var(--lt-space-1) var(--lt-space-3) !important;
+  border: 1px solid var(--lt-hairline) !important;
+  border-radius: var(--lt-radius-pill) !important;
+  font-size: var(--lt-fs-xs) !important;
+  font-weight: 600 !important;
+  color: var(--lt-text-2) !important;
+  transition: background var(--lt-dur-fast) var(--lt-ease-std),
+    color var(--lt-dur-fast) var(--lt-ease-std),
+    border-color var(--lt-dur-fast) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #ytr-subs-header .ytr-vip-toggle:hover {
+  background: var(--lt-surface-2) !important;
+  color: var(--lt-text) !important;
+}
+html.yt-rework ytd-browse[page-subtype="subscriptions"] #ytr-subs-header .ytr-vip-toggle[aria-pressed="true"] {
+  background: var(--lt-gold) !important;
+  border-color: var(--lt-gold) !important;
+  color: #1d1d1f !important; /* dark ink on gold, both themes (gold is light) */
+}
+
+/* 13b. VIP filter — when on, show ONLY rows whose channel rating is >= 4
+   (Step 20 raised the threshold from >=1; locked: "VIP shows only ≥4★").
+   Display-only: pure display:none, never reorders. Double-gated AND scoped to
+   the VIP attribute on <html>; a row is VIP iff data-ytr-star is "4" or "5".
+   We hide rows whose attribute is absent OR "0".."3". content.js only sets
+   data-ytr-star on rows whose channel key resolved; an unresolved row (no key)
+   has no attribute and is treated as non-VIP (hidden under the filter), which
+   is correct — we can't VIP a channel we can't identify. */
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model:not([data-ytr-star]),
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[data-ytr-star="0"],
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[data-ytr-star="1"],
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[data-ytr-star="2"],
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[data-ytr-star="3"],
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer:not([data-ytr-star]),
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer[data-ytr-star="0"],
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer[data-ytr-star="1"],
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer[data-ytr-star="2"],
+html.yt-rework[data-ytr-vip] ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer[data-ytr-star="3"] {
+  display: none !important;
+}
+
+/* 13c. Archived rows leave the inbox. content.js stamps data-ytr-archived="1"
+   on rows whose video id is in the storage.local `archived` map. Display:none
+   (not dim) — they're gone, not just quiet. Double-gated. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer[data-ytr-archived],
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[data-ytr-archived] {
+  display: none !important;
+}
+
+/* =====================================================================
+   14. Find — clean search + learning lens (Step 16)
+   ---------------------------------------------------------------------
+   Search-page reshaping, double-gated html.yt-rework + ytd-search so it
+   NEVER touches other pages (mirrors the page-subtype scope on sections
+   1-7, 11, 13). Section 8 already hides Shorts site-wide; here we hide
+   the Shorts FILTER CHIP and collapse the emptied Shorts SECTIONS so no
+   reflow gap remains, then add the Lectures lens (hides sub-threshold
+   clips) and style the injected toolbar + per-row overflow control. The
+   master switch is the gate — class gone => nothing matches => plain
+   search returns. Keep the ytd-search scope on every layout/hiding rule.
+   ===================================================================== */
+
+/* 14a. Shorts filter chip. CSS can't text-match a chip label, so content.js
+   stamps data-ytr-shorts-chip="1" on the chip whose text is "Shorts"; we hide
+   the stamped chip. If the chip selector drifts the chip reappears (no break). */
+html.yt-rework ytd-search yt-chip-cloud-chip-renderer[data-ytr-shorts-chip] {
+  display: none !important;
+}
+
+/* 14b. Reflow collapse. Section 8 hides the reel shelf itself, but its enclosing
+   search SECTION keeps its header + vertical spacing, leaving a gap. Collapse the
+   whole section when it contains a Shorts shelf. The :has() SUBJECT is the rare
+   reel/shorts shelf tag (not a big anchor-dense container), so invalidation stays
+   local + cheap as results lazy-load. Removes the "Shorts" title + spacing too. */
+html.yt-rework ytd-search ytd-item-section-renderer:has(ytd-reel-shelf-renderer),
+html.yt-rework ytd-search ytd-item-section-renderer:has(ytm-reel-shelf-renderer),
+html.yt-rework ytd-search ytd-shelf-renderer:has(ytd-reel-shelf-renderer),
+html.yt-rework ytd-search ytd-item-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]) {
+  display: none !important;
+}
+
+/* 14c. Lectures lens — when ON (data-ytr-lens on <html>, flipped by the toolbar
+   toggle), hide results content.js flagged as sub-threshold clips (duration under
+   3 min). Display-only, never reorders. Live/upcoming/playlists are NOT flagged,
+   so they stay visible. Off => attribute gone => nothing hidden. */
+html.yt-rework[data-ytr-lens] ytd-search ytd-video-renderer[data-ytr-short-clip] {
+  display: none !important;
+}
+
+/* 14d. Injected search toolbar — the "◎ Lectures" lens pill + quiet hint
+   (Step 24 language pass: the doc's .lens / .lens.on / .find-hint specimens).
+   Injected UI -> styled from the shared --lt-* tokens; double-gated because it
+   lives inside ytd-search. The pill matches the §15 strip pills (the one pill
+   recipe): 32px, --lt-track hairline, --lt-text-2 ink; pressed (lens ON) is
+   ACCENT-SOFT bg + accent text (the doc's .lens.on — never a solid fill,
+   never gold: green marks the active reading lens, not a VIP marker). */
+html.yt-rework ytd-search #ytr-search-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--lt-space-3) !important;
+  margin: 0 0 var(--lt-space-4) !important;
+  padding: var(--lt-space-2) 0 !important;
+  font-family: var(--lt-font) !important;
+}
+html.yt-rework ytd-search #ytr-search-toolbar .ytr-lens-toggle {
+  all: unset !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  height: 32px !important; /* geometry (the mock's pill height), not a token */
+  padding: 0 14px !important; /* geometry, not a token */
+  border: 1px solid var(--lt-track) !important;
+  border-radius: var(--lt-radius-pill) !important;
+  font-size: var(--lt-fs-xs) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  line-height: 1 !important;
+  color: var(--lt-text-2) !important;
+  transition: background var(--lt-dur-fast) var(--lt-ease-std),
+    color var(--lt-dur-fast) var(--lt-ease-std),
+    border-color var(--lt-dur-fast) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-search #ytr-search-toolbar .ytr-lens-toggle:hover {
+  background: var(--lt-surface-2) !important;
+  color: var(--lt-text) !important;
+}
+html.yt-rework ytd-search #ytr-search-toolbar .ytr-lens-toggle:focus-visible {
+  outline: none !important;
+  box-shadow: var(--lt-focus-ring) !important;
+}
+html.yt-rework ytd-search #ytr-search-toolbar .ytr-lens-toggle[aria-pressed="true"] {
+  background: var(--lt-accent-soft) !important;
+  border-color: transparent !important;
+  color: var(--lt-accent) !important;
+}
+html.yt-rework ytd-search #ytr-search-toolbar .ytr-lens-toggle[aria-pressed="true"]:hover {
+  background: var(--lt-accent-soft-2) !important;
+  border-color: transparent !important;
+  color: var(--lt-accent) !important;
+}
+/* The quiet hint beside the pill — "Courses & talks over 3 minutes · Shorts
+   hidden". Shown ONLY while the lens is ON, keyed on the same data-ytr-lens
+   html attribute as the 14c hide rule (one source of truth: attribute gone =>
+   hint gone, no JS show/hide state to desync). */
+html.yt-rework ytd-search #ytr-search-toolbar .ytr-find-hint {
+  display: none !important;
+  font-size: var(--lt-fs-2xs) !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  color: var(--lt-text-3) !important;
+}
+html.yt-rework[data-ytr-lens] ytd-search #ytr-search-toolbar .ytr-find-hint {
+  display: inline !important;
+}
+
+/* 14e. Per-row overflow control on search (reuses the 6k classes/JS). Same quiet
+   "···" that fades in on row hover; the dropdown (Save-to-topic, no Archive on
+   search) is built lazily by content.js. Scoped to ytd-search. */
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf {
+  position: relative !important;
+  display: inline-flex !important;
+  margin-left: var(--lt-space-2) !important;
+}
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf-btn {
+  all: unset !important;
+  cursor: pointer !important;
+  font-size: 1rem !important;
+  line-height: 1 !important;
+  letter-spacing: 0.05em !important;
+  padding: 2px 6px !important;
+  border-radius: var(--lt-radius-ctl) !important;
+  color: var(--lt-text-3) !important;
+  opacity: 0 !important; /* hidden until row hover -> no clutter */
+  transition: opacity var(--lt-dur-fast) var(--lt-ease-std),
+    background var(--lt-dur-fast) var(--lt-ease-std),
+    color var(--lt-dur-fast) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-search ytd-video-renderer:hover .ytr-ovf-btn,
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf.is-open .ytr-ovf-btn {
+  opacity: 1 !important;
+}
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf-btn:hover {
+  background: var(--lt-surface-2) !important;
+  color: var(--lt-text) !important;
+}
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf-menu {
+  position: absolute !important;
+  top: calc(100% + 6px) !important;
+  right: 0 !important;
+  z-index: 100 !important;
+  min-width: 200px !important;
+  max-height: 320px !important;
+  overflow-y: auto !important;
+  padding: var(--lt-space-1) !important;
+  background: var(--lt-surface) !important;
+  border: 1px solid var(--lt-hairline) !important;
+  border-radius: var(--lt-radius-ctl) !important;
+  box-shadow: var(--lt-shadow), var(--lt-lift) !important;
+  font-family: var(--lt-font) !important;
+  text-align: left !important;
+}
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf-section {
+  padding: var(--lt-space-2) var(--lt-space-3) var(--lt-space-1) !important;
+  font-size: var(--lt-fs-2xs) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  color: var(--lt-text-3) !important;
+}
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf-empty {
+  padding: var(--lt-space-2) var(--lt-space-3) !important;
+  font-size: var(--lt-fs-xs) !important;
+  color: var(--lt-text-3) !important;
+}
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf-item {
+  all: unset !important;
+  display: block !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  cursor: pointer !important;
+  padding: var(--lt-space-2) var(--lt-space-3) !important;
+  border-radius: var(--lt-radius-ctl) !important;
+  font-size: var(--lt-fs-base) !important;
+  color: var(--lt-text) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  transition: background var(--lt-dur-fast) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-search ytd-video-renderer .ytr-ovf-item:hover {
+  background: var(--lt-accent-soft) !important;
+  color: var(--lt-accent) !important;
+}
+
+/* Reduced motion (Step 24 — "reduced-motion removes it entirely", like the
+   §10 / §15 blocks): still the injected search chrome's transitions. */
+@media (prefers-reduced-motion: reduce) {
+  html.yt-rework ytd-search #ytr-search-toolbar,
+  html.yt-rework ytd-search #ytr-search-toolbar *,
+  html.yt-rework ytd-search ytd-video-renderer .ytr-ovf,
+  html.yt-rework ytd-search ytd-video-renderer .ytr-ovf * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* =====================================================================
+   15. The Lecture (Step 23) — centered player + the focus strip
+   ---------------------------------------------------------------------
+   content.js stamps data-ytr-room on <html> (the data-ytr-vip pattern)
+   on EVERY /watch page while the master is on (section 8 hides the side
+   column's suggestions site-wide, so the native layout would pin the
+   player against a dead right column): 15a then collapses the
+   #secondary side column and centers the #primary player column — pure
+   CSS on native elements, double-keyed on the master class + the stamp;
+   master-off (or leaving /watch) drops the stamp and restores
+   everything. The focus strip stays IN-TOPIC only (content.js mounts it
+   only when the video resolves to a topic). 15b styles that one
+   injected focus strip
+   (#yt-rework-focus-strip, mounted by content.js at the top of #below):
+   "‹ Back to <topic>" · "Lecture N of M" · a Speed pill · "Next
+   lecture →" — nothing else (no second lecture rail, no notes, no
+   Listen/Offline: killed non-goals, doc §05). All --lt-* tokens
+   (defined on html.yt-rework, so they reach this page), theme-aware via
+   the html.yt-rework[dark] flip. YouTube styles the watch columns, so
+   structural props use !important. The strip uses our OWN id, so no
+   section-8 hide rule ever touches it.
+   ===================================================================== */
+
+/* 15a. Center the player: collapse the side column, center the primary
+   column. Keyed on data-ytr-room — stamped on every /watch under the
+   master; no stamp (master off / off /watch), no change (native layout). */
+html.yt-rework[data-ytr-room] ytd-watch-flexy #secondary {
+  display: none !important;
+}
+html.yt-rework[data-ytr-room] ytd-watch-flexy #primary {
+  margin-left: auto !important;
+  margin-right: auto !important;
+  max-width: 1280px !important; /* geometry (standard player cap), not a token */
+}
+
+/* 15b. The focus strip — one quiet row under the player. */
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: var(--lt-space-4) !important;
+  box-sizing: border-box !important;
+  margin: var(--lt-space-3) 0 var(--lt-space-2) !important;
+  font-family: var(--lt-font) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--lt-space-3) !important;
+  min-width: 0 !important;
+}
+/* "‹ Back to <topic>" — a quiet text link back to the Course view. */
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-back {
+  color: var(--lt-text-2) !important;
+  font-size: var(--lt-fs-xs) !important;
+  font-weight: 500 !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  transition: color var(--lt-dur-med) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-back:hover {
+  color: var(--lt-accent) !important;
+}
+/* "Lecture N of M" — the honest scrape-order position (tabular). */
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-where {
+  font-size: var(--lt-fs-xs) !important;
+  color: var(--lt-text-3) !important;
+  white-space: nowrap !important;
+}
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--lt-space-2) !important;
+  flex-shrink: 0 !important;
+}
+/* The pills — Speed (a real <button>) and Next lecture (a real link). */
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-pill {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important; /* geometry, not a token */
+  height: 32px !important; /* geometry (the mock's pill height), not a token */
+  margin: 0 !important;
+  padding: 0 14px !important; /* geometry, not a token */
+  border: 1px solid var(--lt-track) !important;
+  border-radius: var(--lt-radius-pill) !important;
+  background: var(--lt-surface) !important;
+  color: var(--lt-text-2) !important;
+  font-family: inherit !important;
+  font-size: var(--lt-fs-xs) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  line-height: 1 !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  box-shadow: var(--lt-lift) !important; /* lit from above, never flat */
+  transition: background var(--lt-dur-med) var(--lt-ease-std),
+    border-color var(--lt-dur-med) var(--lt-ease-std),
+    color var(--lt-dur-med) var(--lt-ease-std) !important;
+}
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-pill:hover {
+  border-color: var(--lt-accent) !important;
+  color: var(--lt-accent) !important;
+}
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-pill:focus-visible {
+  outline: none !important;
+  box-shadow: var(--lt-focus-ring), var(--lt-lift) !important;
+}
+/* "Next lecture →" — the accent-soft pill (the mock's .pill.next). */
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-pill-next {
+  background: var(--lt-accent-soft) !important;
+  border-color: transparent !important;
+  color: var(--lt-accent) !important;
+}
+html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-pill-next:hover {
+  background: var(--lt-accent-soft-2) !important;
+  border-color: transparent !important;
+  color: var(--lt-accent) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.yt-rework ytd-watch-flexy #yt-rework-focus-strip *,
+  html.yt-rework ytd-watch-flexy #yt-rework-focus-strip *::before,
+  html.yt-rework ytd-watch-flexy #yt-rework-focus-strip *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
