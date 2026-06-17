@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LearnTube",
   "version": "1.0.0",
-  "description": "Turns YouTube into a calm place to learn: a master on/off switch reclaims the masthead, removes Shorts and other distractions site-wide, and reshapes home and Subscriptions into a syllabus and a quiet inbox.",
+  "description": "A calmer YouTube for learning: one switch hides Shorts and clutter, and turns Subscriptions into a quiet inbox.",
   "permissions": ["storage"],
   "icons": {
     "16": "icons/icon-16.png",
