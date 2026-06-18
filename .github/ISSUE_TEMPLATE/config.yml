@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question, idea, or general feedback
+    url: https://github.com/Jenish-Shobhit/learntube/discussions
+    about: For questions and ideas (not a specific bug), please use Discussions.

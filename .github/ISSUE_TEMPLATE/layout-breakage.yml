@@ -1,0 +1,49 @@
+name: Something stopped working
+description: A part of LearnTube broke — most likely YouTube renamed its page elements.
+title: "[Broken]: "
+labels: ["layout-breakage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        LearnTube is a CSS-first reskin, so a YouTube layout change can silently break a piece of it.
+        Thanks for reporting — the more specific you are, the faster it can be fixed.
+  - type: dropdown
+    id: page
+    attributes:
+      label: Which part broke?
+      options:
+        - Subscriptions (the inbox list)
+        - Home (the Library)
+        - A course view
+        - A watch page (centered player / focus strip)
+        - Search ("Find" / Lectures lens)
+        - The masthead (logo, Create button, bell)
+        - The /shorts/ redirect
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to see?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What do you see instead?
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser & version
+      placeholder: e.g. Chrome 138 on macOS
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot (optional, but very helpful)
+      description: Drag an image in here.

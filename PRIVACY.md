@@ -1,6 +1,6 @@
 # Privacy Policy — LearnTube
 
-**Last updated: 2026**
+**Last updated: 18 June 2026**
 
 LearnTube is a browser extension that reworks the YouTube interface locally in
 your browser. It is built to be private by design.
@@ -56,6 +56,9 @@ everything off at any time with the master switch in the extension popup, which
 restores plain YouTube without uninstalling.
 
 ## Contact
+
+- Chrome Web Store listing: <https://chromewebstore.google.com/detail/jejlhdamaodimmhcomnihmepididhbde>
+- Source & issues: <https://github.com/Jenish-Shobhit/learntube>
 
 Questions about this policy can be raised as an issue on the project's public
 repository.

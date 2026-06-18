@@ -8,6 +8,10 @@ switch.
 > No build step, no dependencies, no tracking. The source files in this
 > repository *are* the shipped extension.
 
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/jejlhdamaodimmhcomnihmepididhbde?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/jejlhdamaodimmhcomnihmepididhbde)
+
+**[➜ Install LearnTube from the Chrome Web Store](https://chromewebstore.google.com/detail/jejlhdamaodimmhcomnihmepididhbde)**
+
 ## Features
 
 - **One master switch.** Click the toolbar icon to toggle the entire rework on
@@ -34,10 +38,9 @@ calm UI on top.
 
 ## Install
 
-> A Chrome Web Store listing is in review. Once approved, the one-click link
-> will go here: **[Chrome Web Store — coming soon](#)**
+**[Install from the Chrome Web Store →](https://chromewebstore.google.com/detail/jejlhdamaodimmhcomnihmepididhbde)** — click **Add to Chrome** and you're set.
 
-In the meantime (or if you'd rather run it from source), load it unpacked:
+Prefer to run it from source? Load it unpacked:
 
 1. **Download this repository** — clone it, or download the ZIP and unzip it
    somewhere permanent (don't delete the folder later; the browser loads the
