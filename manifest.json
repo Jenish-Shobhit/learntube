@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LearnTube",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "minimum_chrome_version": "105",
   "description": "A calmer YouTube for learning: one switch hides Shorts and clutter, and turns Subscriptions into a quiet inbox.",
   "permissions": ["storage"],
   "icons": {

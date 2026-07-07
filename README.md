@@ -16,21 +16,36 @@ switch.
 
 - **One master switch.** Click the toolbar icon to toggle the entire rework on
   or off. Off means plain, untouched YouTube — instantly.
+- **A switchboard of seven switches.** Under the master switch, the popup gives
+  you a switch per distraction — **Hide Shorts**, **Hide watch suggestions**,
+  **Hide comments**, **Hide end screens & cards**, **Simplify the top bar**,
+  **Replace Home with your Library**, and **Start on Subscriptions**. Each one
+  hands that piece of YouTube back to native when you flip it off; the defaults
+  are the classic LearnTube 1.0 experience.
 - **Shorts, gone.** Shorts shelves, tiles, and the sidebar entry are hidden
   site-wide, and any `/shorts/*` link is redirected to the normal player (Back
-  won't bounce you into a Short).
+  won't bounce you into a Short). Flip **Hide Shorts** off and Shorts return.
 - **Subscriptions as an inbox.** Your Subscriptions feed becomes a compact,
   two-line text list (channel name above, title below). Videos you've opened
   dim like read mail, you can star creators, filter to your VIPs, and save a
   video to a learning topic — all without leaving the page.
-- **A Learning home.** The recommendation-stuffed home page is replaced with
-  your own library: add YouTube playlists as "topics" and LearnTube tracks how
-  far through each one you are, with a quiet "Continue where you left off" row
-  and a per-course lecture checklist.
+- **A Learning home — with Peek.** The recommendation-stuffed home page is
+  replaced with your own library: add YouTube playlists as "topics" and
+  LearnTube tracks how far through each one you are, with a quiet "Continue where
+  you left off" row and a per-course lecture checklist. Press **◉ Peek** to
+  reveal, on request, exactly what the algorithm would have shown you —
+  underneath your topics, in a Grid or a calm two-line List view (your choice is
+  remembered). It's display-only; peeking never feeds the algorithm.
+- **Block a channel for good.** Choose **⊘ Block channel** from the ··· menu on
+  any search result or Peek row, and that creator's videos leave everywhere
+  recommendations render — search, both Peek views, and the native home feed.
+  Blocks sync across your devices; unblock from the popup's Blocked list.
+  (Subscriptions stays untouched — you chose those.)
 - **Fewer distractions everywhere.** Watch-page "up next" suggestions, comments,
-  and end-screen cards are removed, the masthead is reclaimed down to
-  [logo · search · account], and search gains an optional "Lectures" lens that
-  hides clips under three minutes.
+  and end-screen cards are removed — on a lecture inside one of your topics, an
+  **Up next ▾** pill brings back just the coming lectures' titles, on demand —
+  the masthead is reclaimed down to [logo · search · account], and search gains
+  an optional "Lectures" lens that hides clips under three minutes.
 
 Everything is display-only: LearnTube **never reorders your feed or touches
 YouTube's recommendation algorithm.** It only hides, restyles, and adds its own

@@ -21,6 +21,61 @@ function apply(enabled) {
   document.documentElement.classList.toggle("yt-rework", reworkEnabled);
 }
 
+// --- v1.1 "The Switchboard" — the seven switches, Peek, Block -----------------
+// All durable state still rides the ONE synced `settings` object (zero new
+// top-level keys). Phase 1 adds `settings.toggles` (the seven switches); Phase 2
+// adds `settings.peekView` ("grid"|"list", the remembered Peek view); Phase 3
+// adds `settings.blockedCreators` ({ "<channelKey>": ts }). Every field is
+// ABSENT on a v1.0 install and reads as its default, so an untouched upgrade
+// behaves byte-identically — zero migration.
+//
+// Phase 1 defaults = v1.0 exactly: the six hide-switches ON, startOnSubscriptions
+// OFF. applyToggles stamps a data-ytr-show-* attr on <html> when a hide is turned
+// OFF (presence = the user opted OUT of that hide); CSS §8/§9/§12/§14a gate their
+// display:none on :not([data-ytr-show-*]). Three switches ALSO gate JS the CSS
+// can't: hideShorts (the /shorts redirect), hideWatchSuggestions (the centered
+// player), replaceHome (mounting the Library). startOnSubscriptions is JS-only
+// (a first-landing redirect fired once from the hard-load seed, never on SPA nav).
+const DEFAULT_TOGGLES = {
+  hideShorts: true,
+  hideWatchSuggestions: true,
+  hideComments: true,
+  hideEndCards: true,
+  simplifyMasthead: true,
+  replaceHome: true,
+  showFeed: true, // the Library's "Show feed" (Peek) button — off = no button at all
+  startOnSubscriptions: false,
+};
+
+// Live mirror, seeded from settings.toggles (merged over the defaults so every
+// field is a real boolean). The JS gates read from here; onChanged keeps it fresh.
+let togglesCache = Object.assign({}, DEFAULT_TOGGLES);
+
+// Phase 2 (Peek) session + view state; Phase 3 (Block) synced mirror. Declared
+// here so they exist before any async callback (seed / onChanged) runs.
+let peekOn = false; // session-only — resets when you leave the Library
+let peekView = "grid"; // mirror of settings.peekView (remembered)
+let blockedCache = {}; // mirror of settings.blockedCreators
+
+// Merge stored toggles over the defaults so an absent field reads as its default.
+function readToggles(settings) {
+  const t = settings && settings.toggles;
+  return Object.assign({}, DEFAULT_TOGGLES, t && typeof t === "object" ? t : {});
+}
+
+// Stamp the six data-ytr-show-* attrs on <html>: presence = the user opted OUT
+// of that hide (switch off). startOnSubscriptions has no CSS, so no attr here.
+function applyToggles(t) {
+  t = t || togglesCache;
+  const h = document.documentElement;
+  h.toggleAttribute("data-ytr-show-shorts", t.hideShorts === false);
+  h.toggleAttribute("data-ytr-show-suggestions", t.hideWatchSuggestions === false);
+  h.toggleAttribute("data-ytr-show-comments", t.hideComments === false);
+  h.toggleAttribute("data-ytr-show-endcards", t.hideEndCards === false);
+  h.toggleAttribute("data-ytr-show-masthead", t.simplifyMasthead === false);
+  h.toggleAttribute("data-ytr-show-home", t.replaceHome === false);
+}
+
 // --- Bounded-retry utility ---------------------------------------------------
 // YouTube hydrates pages late and lazy-loads rows, so several per-nav jobs
 // (mount the Learning shell, decorate Subscriptions, scrape a playlist) must
@@ -83,6 +138,7 @@ function isShortsPath(pathname) {
 
 function redirectShorts() {
   if (!reworkEnabled) return;
+  if (togglesCache.hideShorts === false) return; // S1 off -> /shorts links open
   if (isShortsPath(location.pathname)) {
     // Replace (not push) so Back doesn't bounce the user into the Short again.
     location.replace(location.origin + "/");
@@ -403,6 +459,22 @@ function writePlaylistProgress(listId, freshVideos, title) {
         const v = Object.assign({}, f);
         if (!v.title && p.title) v.title = p.title;
         if (!v.duration && p.duration) v.duration = p.duration;
+        // K1 — MONOTONIC auto-progress invariant: a scrape may only ADD
+        // completion, never remove it. YouTube's resume overlay reads 0 on the
+        // now-playing row and on the virtualised watch-side panel
+        // (ytd-playlist-panel-video-renderer), so re-opening an earlier lecture
+        // re-scrapes an already-watched video at ratio 0 and, taking f
+        // wholesale, would reset its stored watched:true — the count collapses
+        // ("1 of 85"). Keep watched sticky and let ratio only rise; only an
+        // explicit manual un-tick (K2, via mutateVideoDone) may clear
+        // watched-equivalent completion.
+        v.watched = !!f.watched || !!p.watched;
+        v.ratio = Math.max(f.ratio || 0, p.ratio || 0);
+        // K2 — the manual done-tick rides the same record. A scrape never
+        // produces a `done` field, so preserve the stored one exactly (true OR
+        // false — an explicit un-tick must be durable across re-scrapes), the
+        // same field-preserving rule as title/duration above.
+        if (!("done" in v) && "done" in p) v.done = p.done;
         merged.push(v);
       } else {
         merged.push(p);
@@ -437,6 +509,38 @@ function writePlaylistProgress(listId, freshVideos, title) {
       if (chrome.runtime.lastError) {
         console.warn(
           "[yt-rework] progress write failed:",
+          chrome.runtime.lastError
+        );
+      }
+    });
+  });
+}
+
+// --- K2: manual done-tick writer ---------------------------------------------
+// Flip the manual `done` flag for ONE {listId, videoId} and persist to the same
+// storage.local `progress` record the scrape uses (device-local, like the rest
+// of progress — a synced settings.doneVideos set is the cross-device
+// alternative; local is implemented per the brief unless the owner says
+// otherwise). Mirrors writePlaylistProgress's shape so the same `progress`
+// onChanged fan-out (renderLearningHome + roomTickWithRetry) re-renders every
+// tab. `done` is stored as an explicit boolean (never deleted) so an un-tick of
+// a watched lecture is a durable override — the K1 escape hatch (see
+// isLectureComplete). No-op when the lecture isn't scraped yet (nothing to tick).
+function mutateVideoDone(listId, videoId, done) {
+  chrome.storage.local.get({ [PROGRESS_KEY]: {} }, (res) => {
+    const progress = res[PROGRESS_KEY] || {};
+    const rec = progress[listId];
+    if (!rec || !Array.isArray(rec.videos)) return;
+    const v = rec.videos.find((x) => x.id === videoId);
+    if (!v) return;
+    if (!!v.done === !!done && "done" in v) return; // no change -> skip the write
+    v.done = !!done;
+    rec.updatedAt = Date.now();
+    progress[listId] = rec;
+    chrome.storage.local.set({ [PROGRESS_KEY]: progress }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn(
+          "[yt-rework] done write failed:",
           chrome.runtime.lastError
         );
       }
@@ -567,6 +671,22 @@ window.addEventListener("yt-navigate-finish", scrapePlaylistPageWithRetry);
 // (ratio > 0) — currently unconsumed (the Step-12 hint that read it is gone);
 // kept as an additive derived field. Extra keys are additive; callers ignore
 // what they don't use.
+// --- K2: the ONE "complete" helper -------------------------------------------
+// A lecture is complete if the scrape marked it watched OR the user manually
+// ticked it (done === true). A manual UN-tick (done === false) is the single
+// thing that clears a watched-derived completion — the K1 escape hatch: a
+// scrape can no longer clear `watched` (the merge is monotonic), so the un-tick
+// is the only way to correct a lecture YouTube wrongly counted as ≥95% watched.
+// `done` absent → the auto scrape decides. This is `watched || done` for the
+// common case; done:false is the override. EVERY count / Continue / ✓ mark
+// routes through here so they always agree.
+function isLectureComplete(v) {
+  if (!v) return false;
+  if (v.done === true) return true;
+  if (v.done === false) return false;
+  return !!v.watched;
+}
+
 function topicProgress(topic) {
   const playlists = Array.isArray(topic.playlists) ? topic.playlists : [];
   let total = 0;
@@ -578,7 +698,7 @@ function topicProgress(topic) {
     const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
     vids.forEach((v) => {
       total += 1;
-      if (v.watched) watched += 1;
+      if (isLectureComplete(v)) watched += 1;
       else if (!next) {
         next = { videoId: v.id, listId: pl.id };
         resuming = v.ratio > 0;
@@ -612,7 +732,7 @@ function playlistProgress(plId) {
   let watched = 0;
   let next = null;
   vids.forEach((v) => {
-    if (v.watched) watched += 1;
+    if (isLectureComplete(v)) watched += 1;
     else if (!next) next = v.id;
   });
   const total = vids.length;
@@ -657,7 +777,7 @@ function nextLectureAcrossTopics() {
       const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
       for (let k = 0; k < vids.length; k++) {
         const v = vids[k];
-        if (!v.watched && v.ratio > 0) return ctx(t, pls[j].id, v);
+        if (!isLectureComplete(v) && v.ratio > 0) return ctx(t, pls[j].id, v);
       }
     }
   }
@@ -964,6 +1084,64 @@ function renderContinue() {
   return row;
 }
 
+// Phase 2: the Library header's Peek controls — the "◉ Peek" pill (tooltip: the
+// plain sentence) plus, while peeking, a List | Grid segmented switcher. The pill
+// lives only on the Library, so it exists only while S6 (replaceHome) is on —
+// exactly the spec's "the Peek pill exists only while this switch is ON". Static
+// glyphs/labels via textContent; the pill's id lets setPeek re-sync aria-pressed.
+function renderPeekControls() {
+  const wrap = makeEl("div", { className: "ytr-peek-controls" });
+  // K5: "◉ Peek" -> "Show feed" — a plainly named, STATIC label (no glyph, no
+  // show/hide text flip). Same id / class / data-action / aria-pressed /
+  // tooltip / accent-soft pressed state as before, so setPeek and the delegated
+  // handler are unchanged.
+  const pill = makeEl("button", {
+    className: "ytr-peek-pill" + (peekOn ? " is-on" : ""),
+    text: "Show feed",
+    attrs: {
+      type: "button",
+      id: "ytr-peek-pill",
+      "aria-pressed": peekOn ? "true" : "false",
+      title: "See what YouTube would have shown you",
+    },
+  });
+  pill.dataset.action = "peek-toggle";
+  wrap.append(pill);
+  // The List | Grid switcher — shown only while the reveal is open, ordered
+  // AFTER the pill (mock: [Show feed] [List|Grid]).
+  if (peekOn) {
+    const seg = makeEl("div", {
+      className: "ytr-peek-seg",
+      attrs: { role: "group", "aria-label": "Feed layout" },
+    });
+    ["list", "grid"].forEach((v) => {
+      const b = makeEl("button", {
+        className: "ytr-peek-seg-btn" + (peekView === v ? " is-on" : ""),
+        text: v === "list" ? "List" : "Grid",
+        attrs: {
+          type: "button",
+          "aria-pressed": peekView === v ? "true" : "false",
+        },
+      });
+      b.dataset.action = "peek-view";
+      b.dataset.view = v;
+      seg.append(b);
+    });
+    wrap.append(seg);
+  }
+  return wrap;
+}
+
+// K5: the bottom feed-bar (hairline top border) that holds the Peek controls,
+// sitting directly ABOVE where the revealed native feed renders. Rendered on
+// BOTH render paths so the pill exists even on the zero-topics empty state
+// (Session-G B2 lock) — just at the bottom now instead of a top header row.
+function renderFeedBar() {
+  const bar = makeEl("div", { className: "ytr-feed-bar" });
+  bar.append(renderPeekControls());
+  return bar;
+}
+
 // Build THE LIBRARY (Step 21): header ("Library" + reconciling counts) → the
 // quiet Continue row → the one card grid, always closed by the "+ New topic"
 // add-tile. Zero topics falls to the guided first-run empty state (▷ glyph +
@@ -1019,25 +1197,36 @@ function renderLearningInto(root) {
     );
     empty.append(addrow);
     root.append(empty);
+    // K5 / Session-G lock: the feed-bar (with the "Show feed" pill) exists on
+    // the empty state too — now at the bottom, above where the feed reveals.
+    // Gated by the "Show feed button" switch (showFeed): off = no bar at all.
+    if (togglesCache.showFeed !== false) root.append(renderFeedBar());
     return;
   }
 
+  // K5: slim header — "Library" + the reconciling counts on ONE baseline row.
   const head = makeEl("div", { className: "ytr-head" });
   head.append(makeEl("h1", { className: "ytr-title", text: "Library" }));
-  head.append(
-    makeEl("p", { className: "ytr-subtitle", text: overallSummary() })
-  );
+  head.append(makeEl("span", { className: "ytr-stats", text: overallSummary() }));
   root.append(head);
 
-  // The quiet Continue row — hidden when nothing resolves (null).
+  // K5: the HERO Continue card — hidden when nothing resolves (null); the page
+  // then leads with topics.
   const cont = renderContinue();
   if (cont) root.append(cont);
+
+  // K5: a quiet uppercase "TOPICS" shelf label above the card grid.
+  root.append(makeEl("div", { className: "ytr-shelf-label", text: "Topics" }));
 
   // The one card grid, always closed by the add-tile.
   const grid = makeEl("div", { className: "ytr-grid" });
   topicsCache.forEach((t) => grid.append(renderTopicCard(t)));
   grid.append(renderAddTile());
   root.append(grid);
+
+  // K5: the feed controls now live in a bottom feed-bar, above the feed.
+  // Gated by the "Show feed button" switch (showFeed): off = no bar at all.
+  if (togglesCache.showFeed !== false) root.append(renderFeedBar());
 }
 
 // --- Step 14/22: the course view ----------------------------------------------
@@ -1053,6 +1242,11 @@ function renderLearningInto(root) {
 
 // Switch the panel into this topic's course and re-render in place.
 function openCourse(topicId) {
+  // Opening a course takes over the study surface — that IS leaving the Library,
+  // so dismiss the session-only Peek reveal (else CSS §9 keeps the native
+  // algorithm grid revealed as a sibling below the course view, with no in-view
+  // pill to turn it off). Matches "Peek resets when you leave the Library".
+  if (peekOn) setPeek(false);
   currentTopicId = topicId;
   renderLearningHome();
 }
@@ -1068,17 +1262,45 @@ function closeCourse() {
 // its duration label. Real titles only: callers never pass a title-less video
 // (a module without titles shows the calm open-once line instead). No notes,
 // no id strings (doc §COURSE / §05).
-function renderLecture(video, listId) {
+function renderLecture(video, listId, opts) {
+  const complete = isLectureComplete(video);
+  // The focus strip reuses this row verbatim but its rows are plain links
+  // handled by onRoomClick (no toggle branch), so it asks for a display-only
+  // mark; the course view gets the real toggle button.
+  const staticMark = !!(opts && opts.static);
   const row = makeEl("a", {
-    className: "ytr-lec" + (video.watched ? " is-done" : ""),
+    className: "ytr-lec" + (complete ? " is-done" : ""),
   });
   row.href = resumeUrl({ videoId: video.id, listId }); // a URL only — never innerHTML
 
-  const mark = makeEl("span", {
-    className: "ytr-lec-mark",
-    attrs: { "aria-hidden": "true" },
-  });
-  if (video.watched) {
+  // K2: in the course view the mark is a real toggle <button> (manual done-tick).
+  // It sits INSIDE the row <a>; per the delegation contract (onLearningClick) the
+  // button is the closest [data-action] and the row <a> is its ANCESTOR, so
+  // btn.contains(link) is false — the click toggles WITHOUT navigating the row,
+  // and Enter/Space on the focused button fire a native click the delegate
+  // catches. All chrome is rebuilt in CSS via the all:unset idiom.
+  let mark;
+  if (staticMark) {
+    mark = makeEl("span", {
+      className: "ytr-lec-mark",
+      attrs: { "aria-hidden": "true" },
+    });
+  } else {
+    mark = makeEl("button", {
+      className: "ytr-lec-mark",
+      attrs: {
+        type: "button",
+        "aria-pressed": complete ? "true" : "false",
+        "aria-label":
+          (complete ? "Mark not done: " : "Mark done: ") +
+          (video.title || "lecture"),
+      },
+    });
+    mark.dataset.action = "toggle-done";
+    mark.dataset.listId = listId;
+    mark.dataset.videoId = video.id;
+  }
+  if (complete) {
     mark.classList.add("is-done");
     mark.textContent = "✓";
   } else if (video.ratio > 0) {
@@ -1376,6 +1598,41 @@ function handleAction(action, el) {
     return;
   }
 
+  // K2: toggle a lecture's manual done-tick. The button rides inside the row
+  // <a> (delegation contract cancels the row nav for us). Flip complete via the
+  // ONE helper so watched-derived and manual completion agree, then persist —
+  // the progress onChanged re-renders every surface (counts / Continue / ✓).
+  if (action === "toggle-done") {
+    const listId = el.dataset.listId;
+    const videoId = el.dataset.videoId;
+    if (!listId || !videoId) return;
+    const rec = progressCache[listId];
+    const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
+    const v = vids.find((x) => x.id === videoId);
+    if (!v) return; // not scraped yet -> nothing to tick
+    mutateVideoDone(listId, videoId, !isLectureComplete(v));
+    return;
+  }
+
+  // Phase 2: toggle the Peek reveal (session-only). Re-render so the List | Grid
+  // switcher appears/disappears; kick the home decorate pass when revealing.
+  if (action === "peek-toggle") {
+    setPeek(!peekOn);
+    renderLearningHome();
+    // Always re-run the home pass: peek-ON decorates the revealed feed, peek-OFF
+    // lets the retry shed the K3 re-decoration observer (feed now hidden).
+    decorateHomeWithRetry();
+    return;
+  }
+
+  // Phase 2: flip the remembered Peek view (List | Grid). setPeekView persists it
+  // and re-decorates; re-render marks the active segment.
+  if (action === "peek-view") {
+    setPeekView(el.dataset.view);
+    renderLearningHome();
+    return;
+  }
+
   const topicId = topicIdOf(el);
   if (!topicId) return;
 
@@ -1641,12 +1898,17 @@ function removeLearningHome() {
   // course and the add-tile, so the next mount always lands on the Library.
   currentTopicId = null;
   addTileOpen = false;
+  // Phase 2: Peek is session-only — leaving the Library (nav-away / master-off /
+  // S6-off all tear the shell down here) resets the reveal.
+  if (peekOn) setPeek(false);
 }
 
 function mountLearningHome() {
-  // Master off, or not on the home route → ensure no stray root remains.
+  // Master off, not on the home route, or S6 (replaceHome) off → ensure no stray
+  // root remains. S6 off = fully native Home (D2·A): no Library mounts, and the
+  // native feed returns because §9's hide is gated on :not([data-ytr-show-home]).
   const browse = homeBrowse();
-  if (!reworkEnabled || !browse) {
+  if (!reworkEnabled || !browse || togglesCache.replaceHome === false) {
     removeLearningHome();
     return;
   }
@@ -1699,7 +1961,11 @@ function mountLearningHome() {
 const mountLearningHomeWithRetry = makeBoundedRetry(
   () => {
     mountLearningHome();
-    return !!document.getElementById(LEARNING_ROOT_ID); // mounted -> stop early
+    // Mounted -> stop early; S6 off -> nothing to mount, also stop.
+    return (
+      togglesCache.replaceHome === false ||
+      !!document.getElementById(LEARNING_ROOT_ID)
+    );
   },
   150,
   3000
@@ -1841,6 +2107,63 @@ function searchRoot() {
   return document.querySelector("ytd-search");
 }
 
+// --- K3: re-decorate rows YouTube appends on scroll --------------------------
+// The decorators (decorateSearch / decorateHome) run only on nav-bounded
+// retries that settle ~1s after results stabilize, so rows YouTube appends as
+// you scroll (search continuations, the home rich-grid) never receive our ···
+// overflow. Without a chip AND with §14f/§16·11 hiding the native ⋮, those rows
+// have NO menu (the K3 bug). A debounced MutationObserver on the surface's
+// stable root re-runs the (idempotent) sync decorator whenever the subtree
+// changes. Guard against our own chip inserts re-triggering it by disconnecting
+// for the duration of the decorate pass. shouldObserve() re-checks the surface
+// is still active before re-attaching, so master-off / leaving the surface stop
+// it cleanly. The decorate fn is the plain sync decorator (never the retry).
+function makeDecorateObserver(getContainer, decorate, shouldObserve) {
+  let observer = null;
+  let timer = null;
+  const observeNow = () => {
+    const c = getContainer();
+    if (observer && c && shouldObserve())
+      observer.observe(c, { childList: true, subtree: true });
+  };
+  const run = () => {
+    timer = null;
+    if (observer) observer.disconnect(); // don't observe our own writes
+    decorate(); // sync + idempotent
+    observeNow(); // resume only if the surface is still active
+  };
+  const schedule = () => {
+    if (!timer) timer = setTimeout(run, 150); // ~150ms debounce (coalesce bursts)
+  };
+  return {
+    connect() {
+      if (!observer) observer = new MutationObserver(schedule);
+      observeNow();
+    },
+    disconnect() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (observer) observer.disconnect();
+    },
+  };
+}
+
+const searchDecorateObserver = makeDecorateObserver(
+  searchRoot,
+  decorateSearch,
+  () => reworkEnabled && !!searchRoot()
+);
+const homeDecorateObserver = makeDecorateObserver(
+  homeBrowse,
+  decorateHome,
+  () =>
+    reworkEnabled &&
+    !!homeBrowse() &&
+    (peekOn || togglesCache.replaceHome === false)
+);
+
 // Parse a duration label ("12:34", "1:02:03", "0:48") to integer seconds.
 // Returns null for empty / non-numeric (live, upcoming, mixes, playlists, or a
 // non-time badge) — null is NEVER stamped, so those are never hidden by the lens.
@@ -1930,6 +2253,15 @@ function mountSearchToolbar(root) {
 function removeSearchToolbar() {
   const bar = document.getElementById(SEARCH_TOOLBAR_ID);
   if (bar) bar.remove();
+  // K3: leaving search / master-off tears down the search chrome — stop the
+  // re-decoration observer here too (the twin of the ··· purge below).
+  searchDecorateObserver.disconnect();
+  // Also shed the per-row ··· overflow controls (video + channel results). Their
+  // CSS is gated on html.yt-rework, so on master-off an orphan would render as a
+  // raw default button — this is the search twin of purgeHomeOverflow. No-op off
+  // search (searchRoot() null once ytd-search is gone).
+  const sr = searchRoot();
+  if (sr) sr.querySelectorAll(".ytr-ovf").forEach((n) => n.remove());
 }
 
 // Stamp the "Shorts" filter chip so CSS section 14a can hide it. CSS can't
@@ -1959,6 +2291,19 @@ function decorateSearch() {
   const rows = root.querySelectorAll("ytd-video-renderer");
   if (rows.length === 0) pending = true; // results not hydrated yet
   rows.forEach((row) => {
+    // Phase 3: block stamp — every tick so a live blocklist change is reflected
+    // and lazy-loaded results get stamped inside the retry window. Display-only:
+    // CSS §14 hides [data-ytr-blocked]; never reorders. Count only a real
+    // transition as "changed" (the decorateHome pattern) so the retry keeps
+    // ticking while blocks are still being applied — e.g. a single-channel
+    // search re-fetches its rows when a result is removed, and those replaced
+    // rows must still get stamped before the retry settles.
+    const ck = searchRowChannelKey(row);
+    const shouldBlock = !!(ck && blockedCache[ck]);
+    if (shouldBlock !== row.hasAttribute("data-ytr-blocked")) {
+      row.toggleAttribute("data-ytr-blocked", shouldBlock);
+      changed = true;
+    }
     // Duration -> lens flag. Re-evaluate until a real duration is read (the
     // overlay hydrates late); only set the one-shot flag once we've parsed a
     // duration, so a too-early null read doesn't permanently skip the row.
@@ -1995,6 +2340,27 @@ function decorateSearch() {
     }
   });
 
+  // Session H: channel RESULTS (ytd-channel-renderer) — the most natural place
+  // to block a channel (there's no video to save, so the ··· is Block-only).
+  // The block stamp also hides the channel result itself once its channel is
+  // blocked, so "that channel's rows vanish from search" includes this row.
+  const channelRows = root.querySelectorAll("ytd-channel-renderer");
+  channelRows.forEach((row) => {
+    const ck = searchRowChannelKey(row); // same normalizeChannelKey chain
+    const shouldBlock = !!(ck && blockedCache[ck]);
+    if (shouldBlock !== row.hasAttribute("data-ytr-blocked")) {
+      row.toggleAttribute("data-ytr-blocked", shouldBlock);
+      changed = true;
+    }
+    const mount = searchChannelOverflowMount(row);
+    if (!mount) {
+      pending = true; // info block hydrates late -> overflow still to inject
+    } else if (!mount.querySelector(".ytr-ovf")) {
+      mount.appendChild(buildOverflowControl());
+      changed = true;
+    }
+  });
+
   // Delegated capture-phase click, attached once (beat result navigation).
   if (!root.dataset.ytrSearchWired) {
     root.addEventListener("click", onSearchClick, true);
@@ -2023,7 +2389,8 @@ function onSearchClick(e) {
     return;
   }
 
-  // 2. Overflow button -> toggle its menu (no Archive action on search).
+  // 2. Overflow button -> toggle its menu. Video results get Save-to-topic +
+  // Block; a channel RESULT is Block-only (no video to save).
   const ovfBtn = t.closest("[data-ovf-btn]");
   if (ovfBtn) {
     e.preventDefault();
@@ -2032,7 +2399,10 @@ function onSearchClick(e) {
     const wasOpen = wrap.classList.contains("is-open");
     closeOverflowMenus();
     if (!wasOpen) {
-      wrap.appendChild(buildOverflowMenu({ archive: false }));
+      const isChannel = !!ovfBtn.closest("ytd-channel-renderer");
+      wrap.appendChild(
+        buildOverflowMenu({ archive: false, block: true, save: !isChannel })
+      );
       wrap.classList.add("is-open");
     }
     return;
@@ -2050,7 +2420,20 @@ function onSearchClick(e) {
     return;
   }
 
-  // 4. Click elsewhere with a menu open -> close it (let native nav proceed).
+  // 4. Block channel -> add this result's channel key to the synced blocklist.
+  // Resolves both a video result and a channel result row.
+  const blockItem = t.closest("[data-ovf-block]");
+  if (blockItem) {
+    e.preventDefault();
+    e.stopPropagation();
+    const row = blockItem.closest("ytd-video-renderer, ytd-channel-renderer");
+    const ck = row && searchRowChannelKey(row);
+    blockCreator(ck);
+    closeOverflowMenus();
+    return;
+  }
+
+  // 5. Click elsewhere with a menu open -> close it (let native nav proceed).
   if (document.querySelector(".ytr-ovf.is-open")) closeOverflowMenus();
 }
 
@@ -2064,11 +2447,17 @@ const decorateSearchWithRetry = makeBoundedRetry(
         setLensFilter(false);
         closeOverflowMenus();
       }
+      searchDecorateObserver.disconnect(); // K3: off search -> stop watching
       return true;
     }
     // "idle" once settled so the retry stops ~900ms after results stabilize;
     // false (keep ticking) while overlays/results still hydrate.
-    return decorateSearch() ? "idle" : false;
+    const done = decorateSearch();
+    // K3: keep watching for late (scroll-continuation) rows. connect() no-ops
+    // when master is off (shouldObserve gate), so a master-off tick can't
+    // re-attach after removeSearchToolbar cleared it.
+    searchDecorateObserver.connect();
+    return done ? "idle" : false;
   },
   300,
   4000,
@@ -2078,6 +2467,326 @@ const decorateSearchWithRetry = makeBoundedRetry(
 window.addEventListener("yt-rework:locationchange", decorateSearchWithRetry);
 window.addEventListener("popstate", decorateSearchWithRetry);
 window.addEventListener("yt-navigate-finish", decorateSearchWithRetry);
+
+// --- Phase 2: Peek — the algorithm on request (display-only) ------------------
+// A session-only reveal on the Library header. setPeek flips data-ytr-peek on
+// <html> (the setVipFilter recipe): CSS §9 stops hiding the home grid while the
+// attribute is present, so the native feed shows BELOW the Library. Two views —
+// Grid (native thumbnails, untouched) and List (§6's two-line Subscriptions
+// restyle re-scoped to the home rows) — flipped by data-ytr-peek-view, which is
+// remembered in settings.peekView. Peek is session-only: leaving the Library
+// (removeLearningHome) / master-off / S6-off all reset it. NEVER reorders the
+// feed and never signals the algorithm — pure CSS reveal + display-only decorate.
+function setPeek(on) {
+  peekOn = !!on && reworkEnabled;
+  document.documentElement.toggleAttribute("data-ytr-peek", peekOn);
+  // Turning Peek off: purge the ··· overflow controls decorateHome injected onto
+  // the home rows in List view. Their CSS (§16·13) is scoped to
+  // [data-ytr-peek-view="list"], so once the reveal closes a leftover control
+  // would render as a raw, browser-default (and still-clickable) button over the
+  // native cards. This centralizes cleanup for every peek-off path (pill,
+  // openCourse, master-off, S6-off, removeLearningHome, nav-away).
+  if (!peekOn) purgeHomeOverflow();
+  const pill = document.getElementById("ytr-peek-pill");
+  if (pill) pill.setAttribute("aria-pressed", peekOn ? "true" : "false");
+}
+
+// Remove the injected ··· overflow controls from the home rows. Called whenever
+// we leave Peek List mode (view -> grid, Peek off, S6 off) so no unstyled
+// control is stranded on a native grid card.
+function purgeHomeOverflow() {
+  const hb = homeBrowse();
+  if (hb) hb.querySelectorAll(".ytr-ovf").forEach((n) => n.remove());
+}
+
+// Persist the remembered Peek view (read-modify-write settings.peekView, never
+// clobbering masterEnabled / topics / stars / toggles / blockedCreators).
+function mutatePeekView(view) {
+  chrome.storage.sync.get({ [SETTINGS_KEY]: DEFAULT_SETTINGS }, (res) => {
+    const settings = Object.assign({}, DEFAULT_SETTINGS, res[SETTINGS_KEY]);
+    settings.peekView = view === "list" ? "list" : "grid";
+    chrome.storage.sync.set({ [SETTINGS_KEY]: settings }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn("[yt-rework] peekView write failed:", chrome.runtime.lastError);
+      }
+    });
+  });
+}
+
+function setPeekView(view) {
+  peekView = view === "list" ? "list" : "grid";
+  document.documentElement.setAttribute("data-ytr-peek-view", peekView);
+  mutatePeekView(peekView); // remembered for next time (onChanged re-fills mirrors)
+  // Switching TO list needs the rows decorated (ovf injection happens in list
+  // mode only); switching to grid leaves the native cards untouched.
+  if (peekOn) decorateHomeWithRetry();
+}
+
+// --- The home decorate pass (Peek reveal + Block stamps) ---------------------
+// Runs whenever the native home feed is visible: while peeking (S6 on) OR when
+// S6 is off (fully native Home). Two jobs the CSS can't do:
+//  (1) Block (B2): stamp data-ytr-blocked on every row whose channel is blocked
+//      — so blocked creators leave the feed everywhere it renders (native + both
+//      Peek views). Runs in BOTH modes.
+//  (2) Peek List: stamp the row's video id (read-dimming) + inject the ··· menu
+//      (Save to topic / Block) — only in the list view (grid stays native).
+// Reuses the Subscriptions helpers (subsRowVideoId / subsRowChannelKey /
+// subsRowByline / buildOverflowControl) — Home and Subscriptions are the same
+// row elements. Display-only; never reorders. Returns true when settled.
+function decorateHome() {
+  if (!reworkEnabled) return true; // master off -> plain YouTube (settled)
+  const browse = homeBrowse();
+  if (!browse) return true; // off-page; the retry handles teardown
+  const nativeFeed = togglesCache.replaceHome === false;
+  const listView = peekOn && peekView === "list";
+  // Session H: the ··· overflow now rides BOTH Peek views (Grid carries it too),
+  // so it is shed only when we are NOT peeking — the S6-off native feed (which
+  // never gets Block entry points), or any leftover after Peek closes. Runs
+  // before the early return so a native-feed re-decorate always cleans up.
+  if (!peekOn) purgeHomeOverflow();
+  if (!peekOn && !nativeFeed) return true; // Library shown, feed hidden -> nothing
+
+  let changed = false;
+  let pending = false;
+  const rows = browse.querySelectorAll("ytd-rich-item-renderer");
+  if (rows.length === 0) pending = true; // feed not hydrated yet
+  rows.forEach((row) => {
+    // Channel key — needed for the block stamp; retried until the link hydrates.
+    let ck = row.getAttribute("data-ytr-chan");
+    if (!ck) {
+      ck = subsRowChannelKey(row);
+      if (ck) {
+        row.setAttribute("data-ytr-chan", ck);
+        changed = true;
+      } else {
+        pending = true;
+      }
+    }
+    // (1) Block stamp — both modes. Only count a real transition as "changed"
+    // so a page full of stable rows can settle (toggleAttribute's return value
+    // is "present after", which would read as changed every tick).
+    const shouldBlock = !!(ck && blockedCache[ck]);
+    if (shouldBlock !== row.hasAttribute("data-ytr-blocked")) {
+      row.toggleAttribute("data-ytr-blocked", shouldBlock);
+      changed = true;
+    }
+    // (2) Peek extras — injected in BOTH views while peeking (Session H: Grid
+    // carries the ··· too). The video id is stamped in both (Save-to-topic needs
+    // it); read-dimming stays List-only so Grid thumbnails/layout stay native
+    // (the §16·12 dim rule is List-scoped anyway).
+    if (peekOn) {
+      if (!row.getAttribute("data-ytr-vid")) {
+        const vid = subsRowVideoId(row, null);
+        if (vid) {
+          row.setAttribute("data-ytr-vid", vid);
+          changed = true;
+        }
+      }
+      if (listView) applyReadState(row, row.getAttribute("data-ytr-vid"));
+      const byline = subsRowByline(row);
+      if (!byline) {
+        pending = true; // byline hydrates late -> overflow still to inject
+      } else if (!byline.querySelector(".ytr-ovf")) {
+        byline.appendChild(buildOverflowControl());
+        changed = true;
+      }
+    }
+  });
+
+  // Delegated capture-phase click for the Peek list ··· menus, wired once.
+  if (peekOn && !browse.dataset.ytrPeekWired) {
+    browse.addEventListener("click", onPeekClick, true);
+    browse.dataset.ytrPeekWired = "1";
+  }
+  return !changed && !pending;
+}
+
+const decorateHomeWithRetry = makeBoundedRetry(
+  () => {
+    if (!homeBrowse()) {
+      homeDecorateObserver.disconnect(); // K3: off home -> stop watching
+      return true; // removeLearningHome resets Peek
+    }
+    const done = decorateHome();
+    // K3: watch for late feed rows ONLY while the feed is actually decorated —
+    // peeking OR the S6-off native feed. When the Library is shown (feed hidden)
+    // or master is off, shed the observer.
+    if (reworkEnabled && (peekOn || togglesCache.replaceHome === false))
+      homeDecorateObserver.connect();
+    else homeDecorateObserver.disconnect();
+    return done ? "idle" : false;
+  },
+  300,
+  4000,
+  3
+);
+
+window.addEventListener("yt-rework:locationchange", decorateHomeWithRetry);
+window.addEventListener("popstate", decorateHomeWithRetry);
+window.addEventListener("yt-navigate-finish", decorateHomeWithRetry);
+
+// Capture-phase delegated click for the Peek list ··· controls. Mirrors
+// onSearchClick: the menu has Save-to-topic + Block channel (no Archive — that's
+// an inbox tool). Each branch preventDefault + stopPropagation so a control never
+// opens the video; native row clicks pass through.
+function onPeekClick(e) {
+  const t = e.target;
+  if (!t || !t.closest) return;
+
+  // 1. Overflow button -> toggle its menu (Save to topic + Block, no Archive).
+  const ovfBtn = t.closest("[data-ovf-btn]");
+  if (ovfBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = ovfBtn.closest(".ytr-ovf");
+    const wasOpen = wrap.classList.contains("is-open");
+    closeOverflowMenus();
+    if (!wasOpen) {
+      wrap.appendChild(buildOverflowMenu({ archive: false, block: true }));
+      wrap.classList.add("is-open");
+    }
+    return;
+  }
+
+  // 2. Save-to-topic -> save this row's video id.
+  const saveItem = t.closest("[data-ovf-save]");
+  if (saveItem) {
+    e.preventDefault();
+    e.stopPropagation();
+    const row = saveItem.closest("[data-ytr-vid]");
+    const vid = row && row.getAttribute("data-ytr-vid");
+    addVideoToTopic(saveItem.dataset.ovfSave, vid);
+    closeOverflowMenus();
+    return;
+  }
+
+  // 3. Block channel -> add this row's channel key to the synced blocklist.
+  const blockItem = t.closest("[data-ovf-block]");
+  if (blockItem) {
+    e.preventDefault();
+    e.stopPropagation();
+    const row = blockItem.closest("[data-ytr-chan]");
+    const ck = row && row.getAttribute("data-ytr-chan");
+    blockCreator(ck);
+    closeOverflowMenus();
+    return;
+  }
+
+  // 4. Click elsewhere with a menu open -> close it (let native nav proceed).
+  if (document.querySelector(".ytr-ovf.is-open")) closeOverflowMenus();
+}
+
+// --- Phase 3: Block — silence a channel everywhere recommendations render -----
+// The blocklist is synced (small, bounded, user-authored — wanted on every
+// device) inside settings.blockedCreators ({ "<channelKey>": ts }). mutateBlocked
+// is the read-modify-write twin of mutateStars (never clobbers masterEnabled /
+// topics / stars / toggles / peekView). A blocked channel's videos are hidden by
+// CSS on search + both Peek views + the native home feed (S6 off) — display-only,
+// no reorder. Subscriptions is deliberately untouched (you chose those).
+function mutateBlocked(fn) {
+  chrome.storage.sync.get({ [SETTINGS_KEY]: DEFAULT_SETTINGS }, (res) => {
+    const settings = Object.assign({}, DEFAULT_SETTINGS, res[SETTINGS_KEY]);
+    settings.blockedCreators =
+      settings.blockedCreators && typeof settings.blockedCreators === "object"
+        ? Object.assign({}, settings.blockedCreators)
+        : {};
+    fn(settings.blockedCreators);
+    chrome.storage.sync.set({ [SETTINGS_KEY]: settings }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn("[yt-rework] blocked write failed:", chrome.runtime.lastError);
+      }
+    });
+  });
+}
+
+function blockCreator(key) {
+  if (!key || blockedCache[key]) return;
+  blockedCache[key] = Date.now(); // optimistic mirror
+  mutateBlocked((b) => {
+    if (!b[key]) b[key] = Date.now();
+  });
+  // Hide the rows present now, then re-hide across the reflow window: a
+  // single-channel search RE-FETCHES and replaces its result rows ~1-2s after a
+  // result is removed (blocking the channel result triggers it), so the fresh
+  // rows return unstamped and a one-shot restamp misses them (verified live).
+  // onChanged covers other tabs.
+  reapplyBlockedSweep();
+}
+
+// (Unblock has no content.js entry point: the popup's ✕ does its own
+// read-modify-write on settings.blockedCreators via writeSettings, and every
+// YouTube tab's blockedChanged onChanged diff -> restampBlocked() reflects it
+// live. Kept as one path, not two, so there's no orphaned helper to drift.)
+
+// A search result's channel key — the subsRowChannelKey selector chain applied
+// to a ytd-video-renderer, resolved through normalizeChannelKey (@handle / UC… /
+// legacy). Fail-quiet: null -> not block-trackable.
+function searchRowChannelKey(row) {
+  return subsRowChannelKey(row);
+}
+
+// The mount point for the Block-only ··· on a channel result. Prefer
+// #info-section — it WRAPS the channel's #main-link anchor, so our <button>
+// lands OUTSIDE the <a> (never a button nested in a link). CSS then pins the
+// control to the row's top-right. Fallbacks across builds; fail-quiet: null ->
+// not yet hydrated (the retry re-injects), so a drifted id leaves the row
+// clickable.
+function searchChannelOverflowMount(row) {
+  return (
+    row.querySelector("#info-section") ||
+    row.querySelector("#info") ||
+    row.querySelector("#text-container") ||
+    row.querySelector("#metadata") ||
+    null
+  );
+}
+
+// Re-stamp data-ytr-blocked wherever recommendations render (search results +
+// home rows) from the live blockedCache. Called after a block/unblock and from
+// the blockedChanged onChanged diff — CSS hides the stamped rows.
+function restampBlocked() {
+  // Gate the stamp on the master switch: with the rework off a stray sweep tick
+  // (or a cross-tab onChanged) must CLEAR data-ytr-blocked, never re-add it —
+  // master-off is plain YouTube, no leftover data-ytr-* attribute.
+  const on = reworkEnabled;
+  const sr = searchRoot();
+  if (sr) {
+    sr.querySelectorAll("ytd-video-renderer, ytd-channel-renderer").forEach(
+      (row) => {
+        const ck = searchRowChannelKey(row);
+        row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
+      }
+    );
+  }
+  const hb = homeBrowse();
+  if (hb) {
+    hb.querySelectorAll("ytd-rich-item-renderer").forEach((row) => {
+      const ck = row.getAttribute("data-ytr-chan") || subsRowChannelKey(row);
+      row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
+    });
+  }
+}
+
+// Re-stamp NOW and again on a fixed cadence for ~3s. A single-channel search
+// re-fetches and REPLACES its result rows ~1-2s after a result is removed
+// (verified live), so the fresh rows return unstamped; a plain restamp misses
+// them. The cadence outlasts that reflow regardless of its exact timing (it
+// does NOT settle early like the decorate retries). Cheap + idempotent;
+// display-only, never reorders. Runs off-page as harmless no-ops.
+let blockedSweepTimer = null;
+function reapplyBlockedSweep() {
+  restampBlocked();
+  if (blockedSweepTimer) clearInterval(blockedSweepTimer);
+  let ticks = 0;
+  blockedSweepTimer = setInterval(() => {
+    restampBlocked();
+    if (++ticks >= 12) {
+      // ~4.8s at 400ms — outlasts the reflow AND the initial lazy-load settle
+      clearInterval(blockedSweepTimer);
+      blockedSweepTimer = null;
+    }
+  }, 400);
+}
 
 // --- Inbox read state (dim opened videos) ------------------------------------
 // A video is "read" the moment it is OPENED (locked decision) — detected by
@@ -2205,6 +2914,15 @@ window.addEventListener("yt-navigate-finish", markCurrentWatchRead);
 const FOCUS_STRIP_ID = "yt-rework-focus-strip";
 const ROOM_SPEEDS = [1, 1.25, 1.5, 2];
 
+// B1 (Session G): the "Up next ▾" fold — session-only view state, collapsed by
+// default. A module let so roomTick's bounded-retry re-renders don't collapse
+// an open list; keyed to the watch video id so navigating to another lecture
+// starts folded again, and reset on strip teardown (nav-away / master off).
+// This deliberately REOPENS the Step-23 "no second watch-page lecture rail"
+// non-goal, scoped to exactly this on-demand titles-only list.
+let upNextOpen = false;
+let upNextVid = null;
+
 // The <video> the player is using right now. Re-read each interaction (the
 // player can swap the element across SPA nav / ad breaks). First match is the
 // main player.
@@ -2269,7 +2987,7 @@ function courseNextLecture(ctx) {
     const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
     for (let j = 0; j < vids.length; j++) {
       const v = vids[j];
-      if (!v.watched && v.id !== cur) {
+      if (!isLectureComplete(v) && v.id !== cur) {
         return { videoId: v.id, listId: pls[i].id };
       }
     }
@@ -2298,6 +3016,29 @@ function lecturePositionInCourse(ctx) {
   return pos !== null ? { n: pos, total } : null;
 }
 
+// B1 (Session G): the lectures AFTER the current video in course scrape order
+// (the same topic→playlist→video walk every other surface makes), read from
+// progressCache. Real titles or nothing: a video the scrape has no title for
+// is SKIPPED, never given a fabricated label. The current video must itself
+// be in the scraped lists — otherwise "after" is undefined and the caller
+// renders no pill. Display-only: reads the cache, never reorders anything.
+function upcomingLectures(ctx) {
+  const cur = currentWatchVideoId();
+  if (!cur) return [];
+  const out = [];
+  let seen = false;
+  const pls = Array.isArray(ctx.topic.playlists) ? ctx.topic.playlists : [];
+  pls.forEach((pl) => {
+    const rec = progressCache[pl.id];
+    const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
+    vids.forEach((v) => {
+      if (seen && v.title) out.push({ video: v, listId: pl.id });
+      if (v.id === cur) seen = true;
+    });
+  });
+  return out;
+}
+
 // --- The room stamp (the data-ytr-vip pattern) --------------------------------
 // CSS section 15a keys the #secondary collapse + player centering on
 // html.yt-rework[data-ytr-room]; JS only flips the attribute. Guarded so the
@@ -2307,7 +3048,9 @@ function lecturePositionInCourse(ctx) {
 let roomActive = false;
 
 function setRoomActive(on) {
-  const next = !!on && reworkEnabled;
+  // S2 (hideWatchSuggestions) off -> native two-column watch page returns, so
+  // the centered "room" retires with it (they are one decision).
+  const next = !!on && reworkEnabled && togglesCache.hideWatchSuggestions !== false;
   if (next === roomActive) return;
   roomActive = next;
   document.documentElement.toggleAttribute("data-ytr-room", roomActive);
@@ -2322,6 +3065,9 @@ function speedLabel(rate) {
 function removeFocusStrip() {
   const el = document.getElementById(FOCUS_STRIP_ID);
   if (el) el.remove();
+  // Strip teardown resets the Up next fold (B1 — session-only, never persisted).
+  upNextOpen = false;
+  upNextVid = null;
 }
 
 // The strip sits at the top of #below (under the player, above the native
@@ -2349,16 +3095,21 @@ function mountFocusStrip() {
   return true;
 }
 
-// (Re)build the strip from the current context: Back · position · Speed ·
-// Next. Wipes + rebuilds children (idempotent contents). Every dynamic string
-// via textContent; every id only ever a link href / dataset value — never
-// innerHTML.
+// (Re)build the strip from the current context. B1 (Session G): the strip is
+// now a COLUMN of [row, Up next list] — the row holds Back · position · Speed
+// · Up next ▾ · Next; pressing Up next unfolds a quiet titles-only list of
+// the coming lectures under the row (collapsed by default; state survives
+// the re-render ticks via the module let). Wipes + rebuilds children
+// (idempotent contents). Every dynamic string via textContent; every id only
+// ever a link href / dataset value — never innerHTML.
 function renderFocusStrip(ctx) {
   const strip = document.getElementById(FOCUS_STRIP_ID);
   if (!strip || !ctx) return;
   strip.dataset.topicId = ctx.topic.id; // for the Back handler — dataset only
 
   while (strip.firstChild) strip.removeChild(strip.firstChild);
+
+  const row = makeEl("div", { className: "ytr-fs-row" });
 
   // Left: "‹ Back to <topic>" + the honest position (omitted when unknown).
   const left = makeEl("div", { className: "ytr-fs-left" });
@@ -2378,10 +3129,11 @@ function renderFocusStrip(ctx) {
       })
     );
   }
-  strip.append(left);
+  row.append(left);
 
-  // Right: the only two controls — Speed (the real playbackRate) and Next
-  // lecture (a deep-link; simply absent when the course is complete).
+  // Right: Speed (the real playbackRate) · Up next ▾ (only when something
+  // titled comes after this video — real titles or nothing) · Next lecture
+  // (a deep-link; simply absent when the course is complete).
   const right = makeEl("div", { className: "ytr-fs-right" });
   const v = roomVideoEl();
   right.append(
@@ -2395,6 +3147,21 @@ function renderFocusStrip(ctx) {
       },
     })
   );
+  const upcoming = upcomingLectures(ctx);
+  if (upcoming.length > 0) {
+    right.append(
+      makeEl("button", {
+        className: "ytr-pill" + (upNextOpen ? " is-open" : ""),
+        text: "Up next ▾",
+        attrs: {
+          type: "button",
+          "data-room-action": "upnext",
+          "aria-expanded": upNextOpen ? "true" : "false",
+          title: "Show the coming lectures",
+        },
+      })
+    );
+  }
   const next = courseNextLecture(ctx);
   if (next) {
     const go = makeEl("a", {
@@ -2404,7 +3171,19 @@ function renderFocusStrip(ctx) {
     go.href = resumeUrl(next); // a URL only — never innerHTML
     right.append(go);
   }
-  strip.append(right);
+  row.append(right);
+  strip.append(row);
+
+  // The unfolded titles-only list — the course view's .ytr-lec rows reused
+  // verbatim (renderLecture: whole-row deep-link, watched mark, REAL scraped
+  // title, duration omitted when missing). Capped by CSS (~6 rows, scroll).
+  if (upNextOpen && upcoming.length > 0) {
+    const list = makeEl("div", { className: "ytr-fs-upnext" });
+    upcoming.forEach((u) =>
+      list.append(renderLecture(u.video, u.listId, { static: true }))
+    );
+    strip.append(list);
+  }
 }
 
 // Delegated capture-phase click for the strip's two live pieces. Back lets
@@ -2420,6 +3199,19 @@ function onRoomClick(e) {
     const strip = document.getElementById(FOCUS_STRIP_ID);
     armOpenCourseHint(strip && strip.dataset.topicId);
     return; // no preventDefault — the navigation IS the action
+  }
+
+  // B1 (Session G): fold / unfold the Up next list. Re-render the strip from
+  // the freshly-resolved context so the list and the pill's open state stay
+  // one render (the module let survives the tick re-renders).
+  const up = t.closest('[data-room-action="upnext"]');
+  if (up) {
+    e.preventDefault();
+    e.stopPropagation();
+    upNextOpen = !upNextOpen;
+    const ctx = resolveCourseContext();
+    if (ctx) renderFocusStrip(ctx);
+    return;
   }
 
   const btn = t.closest('[data-room-action="speed"]');
@@ -2451,6 +3243,14 @@ function roomTick() {
   if (!ctx) {
     removeFocusStrip();
     return true; // not in a topic -> centered player, no strip
+  }
+  // B1 (Session G): a NEW lecture page starts with the Up next list folded
+  // (collapsed by default); the retry's repeat ticks for the SAME video keep
+  // whatever the user chose (the module let is only reset on a vid change).
+  const vid = currentWatchVideoId();
+  if (vid !== upNextVid) {
+    upNextVid = vid;
+    upNextOpen = false;
   }
   if (!mountFocusStrip()) return false; // #below not hydrated yet
   renderFocusStrip(ctx);
@@ -2602,44 +3402,56 @@ function buildOverflowControl() {
 }
 
 // Build the dropdown menu for one row's overflow control. Save to topic (a list
-// of the user's topics) and — on Subscriptions — Archive. All strings via
-// textContent; topic ids ride in dataset only. opts.archive===false omits the
-// Archive action (search results have no inbox to archive from); default keeps it
-// so Subscriptions is unchanged.
+// of the user's topics), then — on Subscriptions — Archive, or — on search /
+// Peek (Phase 3) — "⊘ Block channel". All strings via textContent; topic ids ride
+// in dataset only. opts.archive===false omits Archive (search / Peek have no
+// inbox to archive from); opts.block===true adds Block channel (search + Peek
+// only, NEVER Subscriptions — you chose those). Defaults keep Subscriptions
+// unchanged (archive on, block off).
 function buildOverflowMenu(opts) {
   const withArchive = !(opts && opts.archive === false);
+  const withBlock = !!(opts && opts.block === true);
+  // opts.save===false omits the Save-to-topic section — a channel RESULT
+  // (ytd-channel-renderer) has no video to save, so its menu is Block-only.
+  // Defaults keep every existing caller (video rows) unchanged (save on).
+  const withSave = !(opts && opts.save === false);
   const menu = document.createElement("div");
   menu.className = "ytr-ovf-menu";
   menu.setAttribute("role", "menu");
 
   // Save to topic — header + a row per topic.
-  const saveLabel = document.createElement("div");
-  saveLabel.className = "ytr-ovf-section";
-  saveLabel.textContent = "Save to topic";
-  menu.appendChild(saveLabel);
+  if (withSave) {
+    const saveLabel = document.createElement("div");
+    saveLabel.className = "ytr-ovf-section";
+    saveLabel.textContent = "Save to topic";
+    menu.appendChild(saveLabel);
 
-  if (!topicsCache.length) {
-    const empty = document.createElement("div");
-    empty.className = "ytr-ovf-empty";
-    empty.textContent = "No topics yet";
-    menu.appendChild(empty);
-  } else {
-    topicsCache.forEach((t) => {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "ytr-ovf-item";
-      item.dataset.ovfSave = t.id;
-      item.setAttribute("role", "menuitem");
-      item.textContent = topicDisplayName(t); // user data -> textContent
-      menu.appendChild(item);
-    });
+    if (!topicsCache.length) {
+      const empty = document.createElement("div");
+      empty.className = "ytr-ovf-empty";
+      empty.textContent = "No topics yet";
+      menu.appendChild(empty);
+    } else {
+      topicsCache.forEach((t) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "ytr-ovf-item";
+        item.dataset.ovfSave = t.id;
+        item.setAttribute("role", "menuitem");
+        item.textContent = topicDisplayName(t); // user data -> textContent
+        menu.appendChild(item);
+      });
+    }
   }
 
   // Archive — clears the row from the inbox (Subscriptions only).
   if (withArchive) {
-    const sep = document.createElement("div");
-    sep.className = "ytr-ovf-sep";
-    menu.appendChild(sep);
+    // Only separate from a section above it (there always is one here — Save).
+    if (menu.childElementCount > 0) {
+      const sep = document.createElement("div");
+      sep.className = "ytr-ovf-sep";
+      menu.appendChild(sep);
+    }
     const arch = document.createElement("button");
     arch.type = "button";
     arch.className = "ytr-ovf-item ytr-ovf-archive";
@@ -2647,6 +3459,25 @@ function buildOverflowMenu(opts) {
     arch.setAttribute("role", "menuitem");
     arch.textContent = "Archive";
     menu.appendChild(arch);
+  }
+
+  // Block channel — silences the creator everywhere recommendations render
+  // (search + both Peek views + the native home feed). Search / Peek only.
+  if (withBlock) {
+    // A Block-only menu (channel results: save off, archive off) has nothing
+    // above it, so skip the leading separator to avoid a stray rule.
+    if (menu.childElementCount > 0) {
+      const sep = document.createElement("div");
+      sep.className = "ytr-ovf-sep";
+      menu.appendChild(sep);
+    }
+    const block = document.createElement("button");
+    block.type = "button";
+    block.className = "ytr-ovf-item ytr-ovf-block";
+    block.dataset.ovfBlock = "1";
+    block.setAttribute("role", "menuitem");
+    block.textContent = "⊘ Block channel";
+    menu.appendChild(block);
   }
 
   return menu;
@@ -2732,6 +3563,15 @@ function mountSubsHeader(browse) {
 function removeSubsHeader() {
   const bar = document.getElementById(SUBS_HEADER_ID);
   if (bar) bar.remove();
+  // Also shed the per-row injected controls (creator stars + ··· overflow). Their
+  // CSS is gated on html.yt-rework, so on master-off an orphan would render as a
+  // raw default control — the Subscriptions twin of removeSearchToolbar /
+  // purgeHomeOverflow. No-op once off Subscriptions (subsBrowse() null; the
+  // controls left with the old page). decorateSubscriptions re-injects them
+  // idempotently on the next master-on / re-visit.
+  const browse = subsBrowse();
+  if (browse)
+    browse.querySelectorAll(".ytr-ovf, .ytr-stars").forEach((n) => n.remove());
 }
 
 // Read-modify-write the synced settings.stars map (never clobbers masterEnabled
@@ -2869,6 +3709,22 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
     if (legacy !== undefined) chrome.storage.sync.remove(LEGACY_KEY);
   }
   apply(settings.masterEnabled);
+  // Phase 1: seed the switches + stamp the data-ytr-show-* opt-out attrs.
+  togglesCache = readToggles(settings);
+  applyToggles(togglesCache);
+  // Phase 2: seed the remembered Peek view (grid default) onto <html> — the list
+  // restyle keys on it, but only matters once data-ytr-peek is also set.
+  peekView = settings.peekView === "list" ? "list" : "grid";
+  // Only stamp the remembered-view attr while the rework is on — a fresh load
+  // with master OFF must stay plain YouTube (no data-ytr-* on <html>). The
+  // master ON transition re-stamps it (see the masterChanged branch).
+  if (reworkEnabled)
+    document.documentElement.setAttribute("data-ytr-peek-view", peekView);
+  // Phase 3: seed the synced blocklist mirror before the first search/home stamp.
+  blockedCache =
+    settings.blockedCreators && typeof settings.blockedCreators === "object"
+      ? settings.blockedCreators
+      : {};
   // Seed the live topics cache before the first render.
   topicsCache = Array.isArray(settings.topics) ? settings.topics : [];
   topicsSeeded = true;
@@ -2878,6 +3734,20 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // Seed the live creator-stars cache before the first Subscriptions decorate.
   starsCache =
     settings.stars && typeof settings.stars === "object" ? settings.stars : {};
+  // S7 — first-landing-only: a FRESH open of youtube.com's home route ("/", from
+  // a new tab / typed address / bookmark) lands on the Subscriptions inbox. Fires
+  // ONLY here (the hard-load seed), never on the SPA nav channels, so clicking the
+  // logo / Home afterwards still reaches the Library, and a direct link (video /
+  // search / playlist) is never redirected. replace() (like /shorts) so Back
+  // never loops.
+  if (
+    reworkEnabled &&
+    togglesCache.startOnSubscriptions === true &&
+    location.pathname === "/"
+  ) {
+    location.replace(location.origin + "/feed/subscriptions");
+    return; // navigating away — nothing else to seed on this doomed document
+  }
   // Catch a hard load that landed directly on a /shorts/* URL.
   redirectShorts();
   // Mount the Learning shell if we hard-loaded onto the home route (retry
@@ -2888,6 +3758,10 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   decorateSubscriptionsWithRetry();
   // Decorate search if we hard-loaded straight onto /results (no-op elsewhere).
   decorateSearchWithRetry();
+  // Phase 2/3: the home decorate pass — stamps blocked rows on the native feed
+  // (S6 off) and drives the Peek reveal; no-op when the Library is shown + not
+  // peeking.
+  decorateHomeWithRetry();
 });
 
 // Seed the progress + read + archived caches (storage.local) so the first
@@ -2960,6 +3834,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
       JSON.stringify(prev.topics || []) !== JSON.stringify(next.topics || []);
     const starsChanged =
       JSON.stringify(prev.stars || {}) !== JSON.stringify(next.stars || {});
+    // v1.1 field diffs.
+    const togglesChanged =
+      JSON.stringify(prev.toggles || {}) !== JSON.stringify(next.toggles || {});
+    const blockedChanged =
+      JSON.stringify(prev.blockedCreators || {}) !==
+      JSON.stringify(next.blockedCreators || {});
 
     // Keep the live mirrors fresh no matter which field moved (read when master
     // flips back on, and by the lazily-built Save-to-topic menus).
@@ -2967,25 +3847,64 @@ chrome.storage.onChanged.addListener((changes, area) => {
     topicsSeeded = true;
     starsCache =
       next.stars && typeof next.stars === "object" ? next.stars : {};
+    // v1.1 mirrors: refresh + re-stamp the show-* attrs / remembered Peek view /
+    // blocklist on every settings write (cheap, and keeps cross-tab tabs honest).
+    togglesCache = readToggles(next);
+    applyToggles(togglesCache);
+    blockedCache =
+      next.blockedCreators && typeof next.blockedCreators === "object"
+        ? next.blockedCreators
+        : {};
+    const nextView = next.peekView === "list" ? "list" : "grid";
+    if (nextView !== peekView) {
+      peekView = nextView;
+      document.documentElement.setAttribute("data-ytr-peek-view", peekView);
+      // Cross-tab: a view flip in another tab must re-run this tab's home pass so
+      // its rows gain (List) or shed (Grid, via decorateHome's purge) the ···
+      // controls. No-op off home. The acting tab already ran this in setPeekView
+      // and skips here (its peekView is already updated -> nextView === peekView).
+      decorateHomeWithRetry();
+    }
 
     if (masterChanged) {
       // Master toggled: the full cross-surface fan-out, exactly as before.
       apply(next.masterEnabled);
+      // Master ON re-stamps the remembered-view attr the seed only sets while on.
+      if (reworkEnabled)
+        document.documentElement.setAttribute("data-ytr-peek-view", peekView);
       // Turning the rework on while sitting on a Short should bounce immediately.
       redirectShorts();
       // Master OFF: drop the injected Subscriptions header + clear the VIP filter
-      // so neither lingers / leaks once the rework is gone.
+      // + the Peek reveal so nothing lingers / leaks once the rework is gone.
       if (!reworkEnabled) {
         removeSubsHeader();
         setVipFilter(false);
         removeSearchToolbar();
         setLensFilter(false);
+        setPeek(false);
+        // Clear the remembered-view stamp too (setPeek only drops data-ytr-peek)
+        // so master-off leaves no data-ytr-* on <html>.
+        document.documentElement.removeAttribute("data-ytr-peek-view");
+        // Master-off is plain YouTube: strip every remaining data-ytr-* element
+        // stamp (block/chan/vid/read/short-clip/search + the Subscriptions
+        // flags + the Shorts chip) so nothing is left behind. The decorate
+        // passes early-return while off and wouldn't otherwise clear these; all
+        // are re-applied on master-on.
+        const STAMPS = [
+          "data-ytr-blocked", "data-ytr-chan", "data-ytr-vid", "data-ytr-read",
+          "data-ytr-short-clip", "data-ytr-search", "data-ytr-mailrow",
+          "data-ytr-star", "data-ytr-archived", "data-ytr-shorts-chip",
+        ];
+        document
+          .querySelectorAll(STAMPS.map((a) => "[" + a + "]").join(","))
+          .forEach((el) => STAMPS.forEach((a) => el.removeAttribute(a)));
         closeOverflowMenus();
       }
       mountLearningHome();
       renderLearningHome();
       decorateSubscriptionsWithRetry();
       decorateSearchWithRetry();
+      decorateHomeWithRetry();
       roomTickWithRetry();
       refreshSubsReadState();
       refreshSubsArchived();
@@ -2994,6 +3913,27 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
 
     // Master unchanged -> refresh ONLY the surface whose field actually moved.
+    if (togglesChanged) {
+      // S1 (hideShorts) gates the /shorts redirect; a flip can free a Short.
+      redirectShorts();
+      // S6 (replaceHome) mounts or tears down the Library; S6 off resets Peek.
+      // Turning the "Show feed button" (showFeed) off also closes an open Peek —
+      // once the pill is gone there'd be no in-view way to dismiss the feed.
+      if (peekOn && (togglesCache.replaceHome === false || togglesCache.showFeed === false))
+        setPeek(false);
+      mountLearningHomeWithRetry();
+      renderLearningHome();
+      // S2 (hideWatchSuggestions) gates the centered player — only on /watch.
+      if (location.pathname === "/watch") roomTickWithRetry();
+      // S6-off native feed needs its blocked stamps; the surface itself moved.
+      decorateHomeWithRetry();
+    }
+    if (blockedChanged) {
+      // Re-stamp data-ytr-blocked live wherever recommendations render (cross
+      // tab + the popup's ✕ unblock). The sweep survives the single-channel
+      // search reflow the same way the local block path does.
+      reapplyBlockedSweep();
+    }
     if (topicsChanged) {
       // A delete-topic / remove-playlist may have orphaned a scraped record.
       pruneOrphanProgress();

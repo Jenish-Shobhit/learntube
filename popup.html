@@ -5,7 +5,7 @@
 <style>
   :root { color-scheme: dark light; }
   body {
-    width: 248px;
+    width: 300px;
     margin: 0;
     padding: 16px 18px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
@@ -29,6 +29,7 @@
     border-radius: 10px;
     padding: 12px 14px;
   }
+  .panel + .panel { margin-top: 12px; }
   .panel-title {
     font-size: 10px;
     font-weight: 600;
@@ -37,18 +38,32 @@
     color: #888;
     margin: 0 0 10px;
   }
+  .section-title {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: #888;
+    margin: 14px 0 4px;
+    padding-top: 12px;
+    border-top: 1px solid #242424;
+  }
   .row {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
+    padding: 5px 0;
   }
+  .row.master { padding-bottom: 2px; }
   .hint {
     font-size: 10.5px;
     line-height: 1.4;
     color: #777;
-    margin: 12px 0 0;
+    margin: 10px 0 0;
   }
-  .label { font-size: 13px; font-weight: 500; }
+  .label { font-size: 12.5px; font-weight: 500; }
+  .row.master .label { font-size: 13px; font-weight: 600; }
   .switch { position: relative; width: 42px; height: 24px; flex: 0 0 auto; }
   .switch input { opacity: 0; width: 0; height: 0; }
   .track {
@@ -64,21 +79,86 @@
   }
   input:checked + .track { background: #30d158; }
   input:checked + .track::before { transform: translateX(18px); }
+  /* Blocked list */
+  .blocked-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+    margin: 4px 0;
+    padding: 6px 10px;
+    background: #1a1a1a;
+    border: 1px solid #242424;
+    border-radius: 8px;
+  }
+  .blocked-key {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    color: #ddd;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .blocked-x {
+    all: unset;
+    cursor: pointer;
+    color: #888;
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    flex: 0 0 auto;
+  }
+  .blocked-x:hover { color: #ff6961; background: #241819; }
 </style>
 </head>
 <body>
   <h1>LearnTube</h1>
   <p>A calm place to learn on YouTube. Turn LearnTube off here to see plain YouTube; turn it on to reclaim the page.</p>
   <div class="panel">
-    <div class="panel-title">Settings</div>
-    <div class="row">
+    <div class="row master">
       <span class="label">Master switch</span>
       <label class="switch">
         <input type="checkbox" id="master-toggle" />
         <span class="track"></span>
       </label>
     </div>
-    <p class="hint">More controls land here in later steps.</p>
+    <div class="section-title">While LearnTube is on</div>
+    <div class="row">
+      <span class="label">Hide Shorts</span>
+      <label class="switch"><input type="checkbox" data-toggle="hideShorts" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Hide watch suggestions</span>
+      <label class="switch"><input type="checkbox" data-toggle="hideWatchSuggestions" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Hide comments</span>
+      <label class="switch"><input type="checkbox" data-toggle="hideComments" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Hide end screens &amp; cards</span>
+      <label class="switch"><input type="checkbox" data-toggle="hideEndCards" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Simplify the top bar</span>
+      <label class="switch"><input type="checkbox" data-toggle="simplifyMasthead" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Replace Home with your Library</span>
+      <label class="switch"><input type="checkbox" data-toggle="replaceHome" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Show feed button</span>
+      <label class="switch"><input type="checkbox" data-toggle="showFeed" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Start on Subscriptions</span>
+      <label class="switch"><input type="checkbox" data-toggle="startOnSubscriptions" /><span class="track"></span></label>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">Blocked</div>
+    <div id="blocked-list"></div>
+    <p class="hint" id="blocked-empty">No channels blocked. Use “⊘ Block channel” from a search or Peek ··· menu.</p>
   </div>
   <script src="popup.js"></script>
 </body>
