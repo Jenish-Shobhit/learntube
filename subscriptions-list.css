@@ -1831,13 +1831,29 @@ html.yt-rework:not([data-ytr-show-shorts]) ytd-search yt-chip-cloud-chip-rendere
 
 /* 14b. Reflow collapse. Section 8 hides the reel shelf itself, but its enclosing
    search SECTION keeps its header + vertical spacing, leaving a gap. Collapse the
-   whole section when it contains a Shorts shelf. The :has() SUBJECT is the rare
-   reel/shorts shelf tag (not a big anchor-dense container), so invalidation stays
-   local + cheap as results lazy-load. Removes the "Shorts" title + spacing too. */
-html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-item-section-renderer:has(ytd-reel-shelf-renderer),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-item-section-renderer:has(ytm-reel-shelf-renderer),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-shelf-renderer:has(ytd-reel-shelf-renderer),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-item-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]) {
+   whole section when it contains a Shorts shelf.
+
+   PERF (Session N — the "/results sits on the spinner for seconds" bug): this
+   USED to be four `:has()` rules whose SUBJECT was ytd-item-section-renderer /
+   ytd-shelf-renderer — i.e. exactly the large, anchor-dense, constantly-mutating
+   container that §8a's comment already warns never to make a :has() subject.
+   ytd-item-section-renderer IS the search result list: with a descendant-relation
+   :has() on it, Blink flags the whole list as has-affected and re-runs the
+   argument scan over the ENTIRE subtree on every insertion while results stream
+   in — O(list²) style recalc on the main thread, which is what YouTube's own
+   render was queued behind. Same collapse, no :has(): content.js stamps
+   data-ytr-shorts-section on the very same containers (the 14a
+   data-ytr-shorts-chip recipe — JS marks, CSS hides), so the selector is a plain
+   attribute match with zero invalidation cost. Trade-off: the collapse lands on
+   the next decorate tick (the K3 observer's 150ms debounce, or the first 300ms
+   retry tick on a fresh search) instead of synchronously — the shelf's
+   thumbnails are ALREADY hidden by §8a, so the worst-case transient is a stray
+   "Shorts" section heading + empty gap for ~150-300ms, never a flash of actual
+   Shorts. Accepted: every cheap mitigation would reintroduce a container-subject
+   :has(). Stamp gone (selector drift, master off) => gap returns, nothing
+   breaks. */
+html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-item-section-renderer[data-ytr-shorts-section],
+html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-shelf-renderer[data-ytr-shorts-section] {
   display: none !important;
 }
 

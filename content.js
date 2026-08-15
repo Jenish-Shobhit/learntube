@@ -2323,6 +2323,57 @@ function stampShortsChip(root) {
     });
 }
 
+// Session N (perf): stamp data-ytr-shorts-section on the search containers that
+// hold a Shorts shelf, so CSS section 14b can collapse them with a plain
+// attribute match instead of a :has() whose subject is the whole result list.
+// (§14b carries the full why; §8a's comment already had the rule — never make a
+// large, constantly-mutating container a :has() subject — and 14b was breaking
+// it on the one page that streams hardest.)
+//
+// Faithful to the four selectors it replaces, which is why the tag test differs
+// by shelf kind: a reel shelf collapsed BOTH its ytd-item-section-renderer and
+// its ytd-shelf-renderer, a Shorts rich-shelf only the item section. (One
+// deliberate superset: ytm-reel-shelf-renderer also counts as a reel for the
+// shelf-renderer wrapper — the old CSS only paired ytd- there, but the mobile
+// tag can't appear in a desktop wrapper anyway.) Walk up
+// from the (rare) shelf tags rather than scanning down from every section, so
+// the pass costs one flat query for tags that are almost never present.
+// TOGGLES (never one-shot): YouTube re-uses these section nodes across queries,
+// so a section that no longer holds a Shorts shelf must lose the stamp or the
+// next search would render a hole. Returns true if anything moved.
+const SHORTS_SECTION_FLAG = "data-ytr-shorts-section";
+const SHORTS_SHELF_SELECTOR =
+  "ytd-reel-shelf-renderer, ytm-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts]";
+
+function stampShortsSections(root) {
+  const want = new Set();
+  root.querySelectorAll(SHORTS_SHELF_SELECTOR).forEach((shelf) => {
+    // A reel shelf also collapsed its ytd-shelf-renderer wrapper; the Shorts
+    // rich-shelf never did (it ships no such wrapper) — keep that asymmetry.
+    const isReel = shelf.tagName !== "YTD-RICH-SHELF-RENDERER";
+    for (let el = shelf.parentElement; el && el !== root; el = el.parentElement) {
+      const tag = el.tagName;
+      if (
+        tag === "YTD-ITEM-SECTION-RENDERER" ||
+        (isReel && tag === "YTD-SHELF-RENDERER")
+      )
+        want.add(el);
+    }
+  });
+  let changed = false;
+  root.querySelectorAll("[" + SHORTS_SECTION_FLAG + "]").forEach((el) => {
+    if (want.has(el)) return;
+    el.removeAttribute(SHORTS_SECTION_FLAG); // section re-used for a new query
+    changed = true;
+  });
+  want.forEach((el) => {
+    if (el.hasAttribute(SHORTS_SECTION_FLAG)) return;
+    el.setAttribute(SHORTS_SECTION_FLAG, "1");
+    changed = true;
+  });
+  return changed;
+}
+
 // Returns true when settled (nothing changed + nothing pending), mirroring
 // decorateSubscriptions, so the retry can stop early (#5). A result whose
 // duration overlay hasn't hydrated (or is live/upcoming -> null) stays pending,
@@ -2336,6 +2387,8 @@ function decorateSearch() {
 
   let changed = false;
   let pending = false;
+  // Session N: the §14b collapse stamp (was a :has() on the result list itself).
+  if (stampShortsSections(root)) changed = true;
   const rows = root.querySelectorAll("ytd-video-renderer");
   if (rows.length === 0) pending = true; // results not hydrated yet
   rows.forEach((row) => {
@@ -4538,6 +4591,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
           "data-ytr-blocked", "data-ytr-chan", "data-ytr-vid", "data-ytr-read",
           "data-ytr-short-clip", "data-ytr-search", "data-ytr-mailrow",
           "data-ytr-star", "data-ytr-archived", "data-ytr-shorts-chip",
+          "data-ytr-shorts-section",
         ];
         document
           .querySelectorAll(STAMPS.map((a) => "[" + a + "]").join(","))
