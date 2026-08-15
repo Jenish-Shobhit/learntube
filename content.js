@@ -1008,34 +1008,70 @@ function playlistTitleFromData(data) {
 // every failure (offline, a 404 on a private list, shape drift, a JSON that
 // won't parse) resolves to "wrote nothing" — the user is exactly where they were
 // before, one playlist visit away from full data.
+// Search decree (v1.2.2): the CLAIM is synchronous, only the network kickoff is
+// idle-deferred. Claiming before the deferral is what keeps the backfill queue's
+// "one fetch per list id per document" true — a caller that picks the next id
+// while a deferred kickoff is still pending must see this id as already taken,
+// or a janky page burns the 3-per-document budget re-picking the same list.
+// Side effect, deliberate: the add-a-playlist call sites (~315 / ~346) become
+// idle-deferred too. That is desirable — an add on a busy page shouldn't fire an
+// ~800KB fetch mid-interaction, and nothing waits on the result.
 function hydratePlaylistInBackground(listId) {
   if (!reworkEnabled || !listId || hydratedLists.has(listId)) return;
-  hydratedLists.add(listId); // claim it BEFORE the await — no double-fetch
-  // Accept: text/html is explicit insurance — fetch's default "*/*" invites
-  // YouTube to answer with an SPA JSON payload that carries no ytInitialData.
-  fetch(playlistUrl(listId), {
-    credentials: "same-origin",
-    headers: { Accept: "text/html" },
-  })
-    .then((res) => (res && res.ok ? res.text() : null))
-    .then((html) => {
-      const data = html ? extractYtInitialData(html) : null;
-      const videos = data ? playlistVideosFromData(data) : [];
-      if (videos.length === 0) {
-        // Q-3: the fetch itself worked (or the page was unreadable) and there is
-        // still nothing to store — a private/deleted list, a mix, or shape drift.
-        // Remember that so the backfill queue steps PAST it instead of re-pulling
-        // ~800KB for it on every single page load until the shape comes back.
-        markHydrateFailed(listId);
-        return;
-      }
-      writePlaylistProgress(listId, videos, playlistTitleFromData(data));
+  hydratedLists.add(listId); // claim it SYNCHRONOUSLY — no double-fetch
+  runWhenIdle(() => {
+    // Accept: text/html is explicit insurance — fetch's default "*/*" invites
+    // YouTube to answer with an SPA JSON payload that carries no ytInitialData.
+    fetch(playlistUrl(listId), {
+      credentials: "same-origin",
+      headers: { Accept: "text/html" },
     })
-    .catch(() => {
-      /* fail-quiet: the old "open it once" behavior remains. Deliberately NOT
-         marked failed — a transient offline blip should retry on the next load,
-         unlike a structural zero-row result. */
-    });
+      .then((res) => (res && res.ok ? res.text() : null))
+      .then((html) => absorbPlaylistHtml(listId, html))
+      .catch(() => {
+        /* fail-quiet: the old "open it once" behavior remains. Deliberately NOT
+           marked failed — a transient offline blip should retry on the next
+           load, unlike a structural zero-row result. */
+      });
+  });
+}
+
+// The main-thread half of a hydration — a brace-match + JSON.parse over a ~180KB
+// slice of a ~800KB document, plus the storage fan-out — split out so it can be
+// scheduled. Same fail-quiet contract as before: a throw in here writes nothing
+// and leaves the user exactly one playlist visit away from full data.
+//
+// Search decree: a fetch started on a quiet page can land while the user is
+// mid-search, so the parse WAITS OUT /results the same way the backfill stepper
+// does. Bounded by ABSORB_DEFER_MAX: if the user simply lives on search, the
+// absorb is dropped. That costs nothing durable — the id stays claimed for this
+// document only, so the next hard load re-queues the list.
+const ABSORB_DEFER_MAX = 40; // ~2 min consecutive on /results -> drop this absorb
+function absorbPlaylistHtml(listId, html, deferrals) {
+  if (onSearchRoute()) {
+    const n = (deferrals || 0) + 1;
+    if (n > ABSORB_DEFER_MAX) return; // give up quietly; next hard load retries
+    setTimeout(
+      () => runWhenIdle(() => absorbPlaylistHtml(listId, html, n)),
+      BACKFILL_DEFER_MS
+    );
+    return;
+  }
+  try {
+    const data = html ? extractYtInitialData(html) : null;
+    const videos = data ? playlistVideosFromData(data) : [];
+    if (videos.length === 0) {
+      // Q-3: the fetch itself worked (or the page was unreadable) and there is
+      // still nothing to store — a private/deleted list, a mix, or shape drift.
+      // Remember that so the backfill queue steps PAST it instead of re-pulling
+      // ~800KB for it on every single page load until the shape comes back.
+      markHydrateFailed(listId);
+      return;
+    }
+    writePlaylistProgress(listId, videos, playlistTitleFromData(data));
+  } catch {
+    /* fail-quiet — see above */
+  }
 }
 
 // Q-3: stamp a "don't bother again for a while" marker onto the list's own
@@ -1119,15 +1155,50 @@ function listIdsMissingScrape() {
 // ponytail: PLAYLIST_FETCH_MAX (3) per document, one every 1.5s after a 2s
 // settle — a deliberate trickle, not a sync. A user with 20 stale playlists tops
 // up over a few page loads; nobody's first paint pays for a burst of fetches.
+//
+// Search decree (v1.2.2): /results must cost LearnTube nothing. A hydration
+// fetch is ~800KB of bandwidth plus a main-thread parse of the blob — invisible
+// on the Library, rude while search results are streaming. So the queue WAITS
+// OUT a search page. The check lives inside `step` (not around the scheduling)
+// so the queue resumes by itself the moment the user leaves /results.
+// The cap counts CONSECUTIVE deferrals (the counter resets the moment a step
+// runs off-search), so it means "~2 minutes parked on search without leaving",
+// not "40 search visits this session" — a YouTube SPA document lives for hours
+// and would otherwise accumulate its way to a permanent stop. Hitting the cap
+// stops the queue for the life of THIS document (backfillRan is never re-armed);
+// the next hard load re-queues it.
+const BACKFILL_DEFER_MS = 3000;
+const BACKFILL_DEFER_MAX = 40; // ~2 min CONSECUTIVE on /results -> give up
+function onSearchRoute() {
+  return location.pathname === "/results";
+}
+// Run fn when the main thread is free-ish. The timeout keeps it a deferral
+// rather than a maybe — but it is a scheduling hint, not a guarantee: fn is
+// queued as a task once the 2s timeout expires, and under continuous long tasks
+// it can land later than that.
+function runWhenIdle(fn) {
+  if (typeof requestIdleCallback === "function")
+    requestIdleCallback(fn, { timeout: 2000 });
+  else setTimeout(fn, 0);
+}
 function backfillMissingPlaylistScrapes() {
   if (backfillRan || !reworkEnabled || !topicsSeeded || !progressSeeded) return;
   if (documentDoomed) return; // S7 redirect in flight — don't fetch for a corpse
   backfillRan = true;
+  let deferrals = 0;
   const step = (n) => {
-    if (n >= PLAYLIST_FETCH_MAX) return;
+    // documentDoomed re-checked per step, not just at entry: an S7 redirect can
+    // be decided AFTER the queue started, and a doomed document must not fetch.
+    if (n >= PLAYLIST_FETCH_MAX || documentDoomed) return;
+    if (onSearchRoute()) {
+      if (++deferrals > BACKFILL_DEFER_MAX) return; // give up; next hard load retries
+      setTimeout(() => step(n), BACKFILL_DEFER_MS); // same n — no budget burned
+      return;
+    }
+    deferrals = 0; // off search again -> the cap means CONSECUTIVE, not lifetime
     const id = listIdsMissingScrape()[0];
     if (!id) return; // nothing left -> stop early, no empty timers
-    hydratePlaylistInBackground(id);
+    hydratePlaylistInBackground(id); // claims synchronously, idles its own fetch
     setTimeout(() => step(n + 1), 1500);
   };
   setTimeout(() => step(0), 2000);
