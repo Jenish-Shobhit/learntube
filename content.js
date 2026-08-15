@@ -31,7 +31,7 @@ function apply(enabled) {
 //
 // Phase 1 defaults = v1.0 exactly: the six hide-switches ON, startOnSubscriptions
 // OFF. applyToggles stamps a data-ytr-show-* attr on <html> when a hide is turned
-// OFF (presence = the user opted OUT of that hide); CSS §8/§9/§12/§14a gate their
+// OFF (presence = the user opted OUT of that hide); CSS §8/§9/§12 gate their
 // display:none on :not([data-ytr-show-*]). Three switches ALSO gate JS the CSS
 // can't: hideShorts (the /shorts redirect), hideWatchSuggestions (the centered
 // player), replaceHome (mounting the Library). startOnSubscriptions is JS-only
@@ -302,6 +302,12 @@ function addPlaylistToTopic(topicId, listId, done) {
       ok = true; // present (already-there counts: the end state is what we want)
     },
     (wrote) => {
+      // Session Q: filing a playlist is the moment we can go get its lectures.
+      // Hanging it off the ONE writer means every add surface (Library paste,
+      // the playlist-page button, Save-to-topic from Subscriptions) inherits it
+      // for free — and hydratePlaylistInBackground self-de-dupes, so re-filing
+      // an already-hydrated list costs nothing.
+      if (ok && wrote) hydratePlaylistInBackground(listId);
       if (done) done(ok && wrote);
     }
   );
@@ -328,6 +334,11 @@ function createTopicWithPlaylist(name, listId, done) {
       });
     },
     (wrote) => {
+      // Session Q: same head start on the create-a-topic path — and here it also
+      // fetches the playlist TITLE the empty-named topic is waiting to adopt
+      // (Step 21 / adoptScrapedTopicNames runs off the progress onChanged), so a
+      // pasted playlist names its own topic without a visit.
+      if (wrote) hydratePlaylistInBackground(listId);
       if (done) done(wrote);
     }
   );
@@ -454,9 +465,9 @@ function playlistVideoTitleFor(renderer) {
   return t || null;
 }
 
-// Shared duration-overlay reader: playlist rows and search results use the same
-// time-status overlay. Old Polymer overlay + Wiz badge-shape fallbacks (the
-// exact Step-16 selector chain — resultDurationSeconds routes through here).
+// Shared duration-overlay reader for playlist rows: old Polymer overlay + Wiz
+// badge-shape fallbacks (the Step-16 selector chain; Session O removed its
+// other caller when the search decorate pass went).
 // Returns the trimmed label text or "" — parsing/validation is the caller's job.
 function durationLabelTextFor(renderer) {
   const el =
@@ -725,6 +736,395 @@ const scrapePlaylistPageWithRetry = makeBoundedRetry(
 window.addEventListener("yt-rework:locationchange", scrapePlaylistPageWithRetry);
 window.addEventListener("popstate", scrapePlaylistPageWithRetry);
 window.addEventListener("yt-navigate-finish", scrapePlaylistPageWithRetry);
+
+// --- Session Q: background hydration on add ----------------------------------
+// The bug this kills: "once a playlist is added, we have to open it once to get
+// all the features." Step 6 only ever ran on a page the USER visited, so a
+// freshly-filed playlist was an id and nothing else — no title, no lectures, no
+// count, no Continue, no Next/Previous — until someone manually opened
+// /playlist?list=…. Here we do that visit invisibly: fetch the playlist page
+// SAME-ORIGIN from the content script (we already run on www.youtube.com, so no
+// CORS and no host_permissions) and parse the `ytInitialData` blob every YouTube
+// page embeds. The result goes through writePlaylistProgress — the SAME writer
+// the DOM scrape uses — so the K1 monotonic merge, the done-flag preservation
+// and the never-blank-a-known-title rule all apply unchanged, and the existing
+// storage.local `progress` onChanged fan-out (renderLearningHome +
+// roomTickWithRetry) lights up every open surface.
+//
+// WHAT THIS CAN AND CANNOT SEE (measured against live logged-in /playlist SSR,
+// 2026-08-16 — the first cut of this code was written against a shape that no
+// longer exists and silently found nothing, so these are facts, not guesses):
+//   • Rows are `lockupViewModel`, NOT `playlistVideoRenderer`. The legacy key is
+//     kept as a cheap fallback branch (logged-out / older builds may still ship
+//     it), collected in the SAME walk.
+//   • WATCH PROGRESS IS NOT IN THE PAYLOAD AT ALL. Zero occurrences of
+//     thumbnailOverlayResumePlaybackRenderer / percentDurationWatched in a ~1MB
+//     logged-in page. So hydration seeds id / title / duration / ORDER only,
+//     always at ratio 0 — it can never tick a ✓. That is safe precisely because
+//     the K1 merge is monotonic: a 0 can only ever be raised by the real DOM
+//     scrape, never lower a stored watched:true.
+// This is therefore a HEAD START (names, counts, ordering, Next/Previous), and
+// the real playlist visit remains the pass that supplies completion.
+//
+// ponytail: the SSR payload carries only the FIRST ~10-17 rows; the rest sit
+// behind `continuationItemRenderer`. Long courses hydrate to that prefix and the
+// DOM scrape on a real visit remains the completing pass — deliberately NOT
+// implementing innertube /browse continuation calls (an unversioned private API,
+// an INNERTUBE key to scrape, and a request shape that breaks quietly; a lazy
+// senior dev does not sign up to maintain that for the tail of a playlist).
+// ponytail: one fetch per list id per document, and at most PLAYLIST_FETCH_MAX
+// backfills per document — no retry, no queue, no polling. A failed fetch is
+// simply the pre-Session-Q behavior (open it once), which is the honest floor.
+const PLAYLIST_FETCH_MAX = 3;
+
+// Q-3: how long a list that fetched fine but yielded ZERO usable rows (private,
+// deleted, a mix, or shape drift) is left alone by the backfill. Without this the
+// permanently-unhydratable list parks at the head of the queue and re-downloads
+// ~800KB on EVERY page load, forever, while the lists behind it never get a turn.
+const HYDRATE_RETRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// List ids fetched (or in flight) in THIS document — the whole de-dupe.
+const hydratedLists = new Set();
+
+// Pull the `var ytInitialData = {…};` blob out of a fetched page. Brace-matched
+// (string- and escape-aware) rather than regexed, so a "}" inside a title can't
+// truncate it. Tries the first few occurrences of the name — earlier ones can be
+// a mention rather than the assignment. Returns the parsed object or null; every
+// failure path is silent and lands us back on the old behavior.
+function extractYtInitialData(html) {
+  let from = 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const key = html.indexOf("ytInitialData", from);
+    if (key < 0) return null;
+    from = key + 13;
+    const eq = html.indexOf("=", key);
+    const start = eq < 0 ? -1 : html.indexOf("{", eq);
+    // The brace must follow the "=" almost immediately ("= {"), else this
+    // occurrence was a mention and the "{" belongs to some other object.
+    if (start < 0 || start - eq > 4) continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < html.length; i++) {
+      const c = html[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth += 1;
+      else if (c === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            return JSON.parse(html.slice(start, i + 1));
+          } catch (_) {
+            break; // malformed -> try the next occurrence
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Collect every object stored under any of `keys` in a ytInitialData tree, in
+// document order, as { key, value } pairs. Shape-agnostic on purpose: YouTube
+// reshuffles the wrapper chain (twoColumnBrowseResults → tabs → sectionList →
+// itemSection → …) far more often than it renames a renderer, so we walk instead
+// of pinning a path — which is exactly what lets one walk pick up BOTH the
+// current `lockupViewModel` rows and the legacy `playlistVideoRenderer` ones in
+// their true interleaved order. Bounded on depth and on matches found.
+function collectRenderers(node, keys, out, depth) {
+  if (!node || typeof node !== "object" || depth > 30 || out.length >= 500)
+    return;
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++)
+      collectRenderers(node[i], keys, out, depth + 1);
+    return;
+  }
+  for (const k in node) {
+    const v = node[k];
+    if (keys.indexOf(k) >= 0 && v && typeof v === "object")
+      out.push({ key: k, value: v });
+    else collectRenderers(v, keys, out, depth + 1);
+  }
+}
+
+// Flatten a YouTube text node ({simpleText} or {runs:[{text}]}) to a clean
+// string, or null. "Real titles or nothing" — never a fabricated label.
+function ytTextOf(node) {
+  if (!node || typeof node !== "object") return null;
+  if (typeof node.simpleText === "string") {
+    const s = node.simpleText.replace(/\s+/g, " ").trim();
+    if (s) return s;
+  }
+  if (!Array.isArray(node.runs)) return null;
+  const t = node.runs
+    .map((r) => (r && typeof r.text === "string" ? r.text : ""))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t || null;
+}
+
+// The watched fraction carried by a LEGACY row's resume-playback overlay (0..1).
+// Retained only for the playlistVideoRenderer fallback — the current
+// lockupViewModel payload has no progress field of any kind (see the header
+// note), so on today's YouTube this function is simply never reached with data.
+function resumeRatioOf(renderer) {
+  const ovs = Array.isArray(renderer.thumbnailOverlays)
+    ? renderer.thumbnailOverlays
+    : [];
+  for (let i = 0; i < ovs.length; i++) {
+    const p = ovs[i] && ovs[i].thumbnailOverlayResumePlaybackRenderer;
+    const pct = p && p.percentDurationWatched;
+    if (typeof pct === "number" && isFinite(pct))
+      return Math.max(0, Math.min(1, pct / 100));
+  }
+  return 0;
+}
+
+// Only a real time label ("9:52", "1:02:03") becomes a duration — the same
+// parseDurationToSeconds gate the DOM path uses, which is what keeps a "LIVE" /
+// "NEW" / "4K" badge from being stored as a length.
+function durationOrNull(label) {
+  const s = typeof label === "string" ? label.replace(/\s+/g, " ").trim() : "";
+  return s && parseDurationToSeconds(s) !== null ? s : null;
+}
+
+// The duration badge of a lockup row. The real path (verified live) is
+// contentImage.thumbnailViewModel.overlays[] → thumbnailBottomOverlayViewModel
+// .badges[] → thumbnailBadgeViewModel.text. The badges array is NOT
+// duration-only, so every candidate is validated and the first real time label
+// wins; nothing usable => null (field omitted, never a placeholder).
+function lockupDurationOf(lockup) {
+  const overlays =
+    lockup.contentImage &&
+    lockup.contentImage.thumbnailViewModel &&
+    Array.isArray(lockup.contentImage.thumbnailViewModel.overlays)
+      ? lockup.contentImage.thumbnailViewModel.overlays
+      : [];
+  for (let i = 0; i < overlays.length; i++) {
+    const bottom = overlays[i] && overlays[i].thumbnailBottomOverlayViewModel;
+    const badges = bottom && Array.isArray(bottom.badges) ? bottom.badges : [];
+    for (let j = 0; j < badges.length; j++) {
+      const b = badges[j] && badges[j].thumbnailBadgeViewModel;
+      const d = durationOrNull(b && b.text);
+      if (d) return d;
+    }
+  }
+  return null;
+}
+
+// One lockupViewModel -> the Step-19 progress record shape. Video rows only
+// (contentType gate — a playlist page can carry non-video lockups). No progress
+// field exists in this payload, so ratio is always 0 / watched false; the K1
+// monotonic merge guarantees that can never un-tick anything already known.
+function videoFromLockup(lockup) {
+  if (lockup.contentType !== "LOCKUP_CONTENT_TYPE_VIDEO") return null;
+  const id = typeof lockup.contentId === "string" ? lockup.contentId : null;
+  if (!id) return null;
+  const video = { id, watched: false, ratio: 0 };
+  const meta = lockup.metadata && lockup.metadata.lockupMetadataViewModel;
+  const raw = meta && meta.title && meta.title.content;
+  const title =
+    typeof raw === "string" ? raw.replace(/\s+/g, " ").trim() : "";
+  if (title) video.title = title; // omitted when unreadable — never fabricated
+  const dur = lockupDurationOf(lockup);
+  if (dur) video.duration = dur;
+  return video;
+}
+
+// One LEGACY playlistVideoRenderer -> the same record shape. Kept because a
+// logged-out or older-build response may still ship this key; it is the only
+// branch that can carry a real watched ratio.
+function videoFromPlaylistRenderer(r) {
+  const id = r && typeof r.videoId === "string" ? r.videoId : null;
+  if (!id) return null;
+  const ratio = resumeRatioOf(r);
+  const video = { id, watched: ratio >= WATCHED_RATIO, ratio };
+  const title = ytTextOf(r.title);
+  if (title) video.title = title;
+  const dur = durationOrNull(ytTextOf(r.lengthText));
+  if (dur) video.duration = dur;
+  return video;
+}
+
+// The two row shapes, collected in ONE walk so their document order is the
+// playlist's order.
+const PLAYLIST_ROW_KEYS = ["lockupViewModel", "playlistVideoRenderer"];
+
+// Parse a fetched playlist page's ytInitialData into the progress video list.
+// Returns [] on any drift — the caller then writes nothing.
+function playlistVideosFromData(data) {
+  const rows = [];
+  collectRenderers(data, PLAYLIST_ROW_KEYS, rows, 0);
+  const seen = new Set();
+  const videos = [];
+  rows.forEach((row) => {
+    const v =
+      row.key === "lockupViewModel"
+        ? videoFromLockup(row.value)
+        : videoFromPlaylistRenderer(row.value);
+    if (!v || seen.has(v.id)) return; // de-dupe, keep first (playlist order)
+    seen.add(v.id);
+    videos.push(v);
+  });
+  return videos;
+}
+
+// The playlist's own title, for the Library card + the Step-21 topic-name
+// adoption. Metadata first, header renderers as drift cover, null otherwise
+// (writePlaylistProgress then keeps whatever it had).
+function playlistTitleFromData(data) {
+  const meta = data && data.metadata && data.metadata.playlistMetadataRenderer;
+  if (meta && typeof meta.title === "string" && meta.title.trim())
+    return meta.title.trim();
+  const heads = [];
+  collectRenderers(data, ["playlistHeaderRenderer"], heads, 0);
+  const ht = heads.length ? ytTextOf(heads[0].value.title) : null;
+  if (ht) return ht;
+  // The current SSR ships the name via the page header instead.
+  const pages = [];
+  collectRenderers(data, ["pageHeaderRenderer"], pages, 0);
+  const pt =
+    pages.length && typeof pages[0].value.pageTitle === "string"
+      ? pages[0].value.pageTitle.trim()
+      : "";
+  return pt || null;
+}
+
+// Fetch + parse + merge. Fire-and-forget: no return value, no callback, and
+// every failure (offline, a 404 on a private list, shape drift, a JSON that
+// won't parse) resolves to "wrote nothing" — the user is exactly where they were
+// before, one playlist visit away from full data.
+function hydratePlaylistInBackground(listId) {
+  if (!reworkEnabled || !listId || hydratedLists.has(listId)) return;
+  hydratedLists.add(listId); // claim it BEFORE the await — no double-fetch
+  // Accept: text/html is explicit insurance — fetch's default "*/*" invites
+  // YouTube to answer with an SPA JSON payload that carries no ytInitialData.
+  fetch(playlistUrl(listId), {
+    credentials: "same-origin",
+    headers: { Accept: "text/html" },
+  })
+    .then((res) => (res && res.ok ? res.text() : null))
+    .then((html) => {
+      const data = html ? extractYtInitialData(html) : null;
+      const videos = data ? playlistVideosFromData(data) : [];
+      if (videos.length === 0) {
+        // Q-3: the fetch itself worked (or the page was unreadable) and there is
+        // still nothing to store — a private/deleted list, a mix, or shape drift.
+        // Remember that so the backfill queue steps PAST it instead of re-pulling
+        // ~800KB for it on every single page load until the shape comes back.
+        markHydrateFailed(listId);
+        return;
+      }
+      writePlaylistProgress(listId, videos, playlistTitleFromData(data));
+    })
+    .catch(() => {
+      /* fail-quiet: the old "open it once" behavior remains. Deliberately NOT
+         marked failed — a transient offline blip should retry on the next load,
+         unlike a structural zero-row result. */
+    });
+}
+
+// Q-3: stamp a "don't bother again for a while" marker onto the list's own
+// progress record. Piggybacking the existing record (rather than a new storage
+// key) means it inherits pruneOrphanProgress for free — delete the topic and the
+// marker goes with it — and needs no new cache/seed. A later successful write
+// (this hydration or the real DOM scrape) rebuilds the record wholesale and
+// drops the marker, which is exactly the intended reset.
+function markHydrateFailed(listId) {
+  chrome.storage.local.get({ [PROGRESS_KEY]: {} }, (res) => {
+    const progress = res[PROGRESS_KEY] || {};
+    const prev = progress[listId] || {};
+    if (Array.isArray(prev.videos) && prev.videos.length > 0) return; // has data
+    progress[listId] = {
+      updatedAt: Date.now(),
+      title: prev.title || "",
+      videos: [],
+      hydrateFailed: Date.now(),
+    };
+    chrome.storage.local.set({ [PROGRESS_KEY]: progress }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn(
+          "[yt-rework] hydrate marker write failed:",
+          chrome.runtime.lastError
+        );
+      }
+    });
+  });
+}
+
+// --- The one-shot backfill ----------------------------------------------------
+// Playlists filed BEFORE this shipped (or whose add-time fetch failed) still
+// have no scrape. Once both caches are seeded, top up a few of them. The queue is
+// recomputed at each step from the LIVE caches, so a sibling tab whose write has
+// already landed AND reached us (via the progress onChanged that refreshes
+// progressCache) drops that id from our remaining steps. That is a best-effort
+// damper, NOT a guarantee: two tabs seeding at the same moment will both pick the
+// same head id and both fetch it. Bounded at 3 per document, so the worst case is
+// a handful of duplicate requests, not a storm.
+let progressSeeded = false;
+let backfillRan = false;
+
+// Set when the S7 first-landing branch fires location.replace() — this document
+// is on its way out and must not start fetches it will never use.
+let documentDoomed = false;
+
+// Q-3: list ids that can never hydrate from a /playlist fetch. RD* are
+// auto-generated radio/mix "playlists" (server-built per session, no stable page),
+// WL is Watch Later and LL is Liked Videos — private system lists whose SSR ships
+// no rows to an unauthenticated-style document fetch. Skipping them by shape
+// costs one regex and saves the queue from burning its budget on certain misses.
+function isNonHydratableListId(id) {
+  return /^RD/.test(id) || id === "WL" || id === "LL";
+}
+
+function listIdsMissingScrape() {
+  const now = Date.now();
+  const out = [];
+  topicsCache.forEach((t) => {
+    (Array.isArray(t.playlists) ? t.playlists : []).forEach((pl) => {
+      if (!pl || !pl.id || hydratedLists.has(pl.id) || out.includes(pl.id))
+        return;
+      if (isNonHydratableListId(pl.id)) return;
+      const rec = progressCache[pl.id];
+      if (rec && Array.isArray(rec.videos) && rec.videos.length > 0) return;
+      // Q-3: a list that already came back empty is off the queue until the
+      // cooldown lapses — otherwise it parks at the head forever and everything
+      // behind it starves.
+      if (
+        rec &&
+        typeof rec.hydrateFailed === "number" &&
+        now - rec.hydrateFailed < HYDRATE_RETRY_MS
+      )
+        return;
+      out.push(pl.id);
+    });
+  });
+  return out;
+}
+
+// ponytail: PLAYLIST_FETCH_MAX (3) per document, one every 1.5s after a 2s
+// settle — a deliberate trickle, not a sync. A user with 20 stale playlists tops
+// up over a few page loads; nobody's first paint pays for a burst of fetches.
+function backfillMissingPlaylistScrapes() {
+  if (backfillRan || !reworkEnabled || !topicsSeeded || !progressSeeded) return;
+  if (documentDoomed) return; // S7 redirect in flight — don't fetch for a corpse
+  backfillRan = true;
+  const step = (n) => {
+    if (n >= PLAYLIST_FETCH_MAX) return;
+    const id = listIdsMissingScrape()[0];
+    if (!id) return; // nothing left -> stop early, no empty timers
+    hydratePlaylistInBackground(id);
+    setTimeout(() => step(n + 1), 1500);
+  };
+  setTimeout(() => step(0), 2000);
+}
 
 // Join the progress cache against a topic's playlists: percentage = watched /
 // total known, and the first unwatched video (in playlist order) for resume.
@@ -2141,32 +2541,28 @@ window.addEventListener(
 window.addEventListener("popstate", decorateSubscriptionsWithRetry);
 window.addEventListener("yt-navigate-finish", decorateSubscriptionsWithRetry);
 
-// --- Step 16: Find — clean search + learning lens ----------------------------
-// Search (/results) is reshaped the same CSS-first way as Subscriptions: section
-// 14 hides Shorts results/shelves/chip + collapses their reflow gaps, and (when
-// the lens is ON) hides sub-threshold clips. This JS does only what CSS can't:
-// (1) parse each result's on-page duration into a data-ytr-short-clip flag the
-// lens CSS keys on, (2) stamp the "Shorts" filter chip so CSS can hide it,
-// (3) inject the lens toggle, (4) run the capture-phase delegated click for it,
-// (5) stamp data-ytr-blocked on results from blocked channels. (Session L: the
-// per-row "···" overflow control this used to inject is gone — search rows keep
-// YouTube's own ⋮.) No Data API — duration comes from the overlay
-// text. All master-gated; no-op off /results.
-const SHORT_CLIP_MAX_SECONDS = 180; // hide clips under 3 min when the lens is on
-const SEARCH_FLAG = "data-ytr-search"; // one-shot per-row idempotency flag
-
+// --- Step 16: Find — search is YouTube's own ---------------------------------
+// Session O (v1.2.1): LearnTube no longer touches /results. The entire search
+// decorate pass is GONE — the Lectures lens + its injected toolbar, the
+// duration/short-clip stamping, the per-row wiring, the search MutationObserver
+// and every §14 restyle. Search stayed slow under it and native search is the
+// product decision: /results renders YouTube's own cards, at YouTube's own speed.
+//
+// Exactly two LearnTube behaviours still reach /results, and BOTH ride the
+// nav-driven reapplyBlockedSweep() cadence below — no observer, no retry loop:
+//   • blocked-channel rows keep their data-ytr-blocked stamp (CSS §17 hides)
+//   • Shorts sections keep their data-ytr-shorts-section stamp (CSS §14b collapses)
+// searchRoot() survives only as the scope for those two passes.
 function searchRoot() {
   return document.querySelector("ytd-search");
 }
 
 // --- K3: re-decorate rows YouTube appends on scroll --------------------------
-// The decorators (decorateSearch / decorateHome) run only on nav-bounded
-// retries that settle ~1s after results stabilize, so rows YouTube appends as
-// you scroll (search continuations, the home rich-grid) would never be
-// decorated. Session L: the ··· chip those rows used to be missing is gone, but
-// the observer still earns its keep — a continuation row from a BLOCKED channel
-// must get its data-ytr-blocked stamp (and a search row its lens flag) or it
-// renders in full. A debounced MutationObserver on the surface's
+// decorateHome runs only on nav-bounded retries that settle ~1s after the feed
+// stabilizes, so rows YouTube appends as you scroll (the home rich-grid) would
+// never be decorated — and a continuation row from a BLOCKED channel must get
+// its data-ytr-blocked stamp or it renders in full. A debounced
+// MutationObserver on the surface's
 // stable root re-runs the (idempotent) sync decorator whenever the subtree
 // changes. Guard against our own stamps re-triggering it by disconnecting
 // for the duration of the decorate pass. shouldObserve() re-checks the surface
@@ -2204,11 +2600,8 @@ function makeDecorateObserver(getContainer, decorate, shouldObserve) {
   };
 }
 
-const searchDecorateObserver = makeDecorateObserver(
-  searchRoot,
-  decorateSearch,
-  () => reworkEnabled && !!searchRoot()
-);
+// Session O: home is the ONLY surface with a decorate observer. Search
+// deliberately has none — see the Step 16 note above.
 const homeDecorateObserver = makeDecorateObserver(
   homeBrowse,
   decorateHome,
@@ -2231,101 +2624,12 @@ function parseDurationToSeconds(text) {
   return secs;
 }
 
-// Read a result's duration overlay text -> seconds (or null). The overlay
-// selectors live in the shared durationLabelTextFor (Step 19 — playlist rows
-// use the same overlay). Fail-quiet on drift (null -> not stamped).
-function resultDurationSeconds(renderer) {
-  return parseDurationToSeconds(durationLabelTextFor(renderer));
-}
-
-// Resolve a result's video id from its title/thumbnail link (reuses
-// videoIdFromHref -> strips &list=/&t=). Fail-quiet: null -> not saved.
-function searchRowVideoId(renderer) {
-  const a =
-    renderer.querySelector("a#video-title[href]") ||
-    renderer.querySelector("a#thumbnail[href]") ||
-    renderer.querySelector('a[href*="watch"]');
-  return videoIdFromHref(a && a.getAttribute("href"));
-}
-
-// --- Lectures lens (display-only view filter, session state) -----------------
-// Mirrors the VIP filter: OFF by default (calm), flips data-ytr-lens on <html>;
-// CSS section 14c then hides [data-ytr-short-clip] results. Never reorders.
-let lensFilterOn = false;
-
-function setLensFilter(on) {
-  lensFilterOn = !!on && reworkEnabled;
-  document.documentElement.toggleAttribute("data-ytr-lens", lensFilterOn);
-  const toggle = document.getElementById("ytr-lens-toggle");
-  if (toggle)
-    toggle.setAttribute("aria-pressed", lensFilterOn ? "true" : "false");
-}
-
-// --- Injected search toolbar (Lectures lens toggle) --------------------------
-const SEARCH_TOOLBAR_ID = "ytr-search-toolbar";
-
-function searchToolbarMountTarget(root) {
-  return (
-    root.querySelector("ytd-section-list-renderer #contents") ||
-    root.querySelector("#contents") ||
-    root
-  );
-}
-
-function mountSearchToolbar(root) {
-  root = root || searchRoot();
-  if (!root) return;
-  if (document.getElementById(SEARCH_TOOLBAR_ID)) return; // idempotent
-  const host = searchToolbarMountTarget(root);
-  if (!host) return;
-
-  const bar = document.createElement("div");
-  bar.id = SEARCH_TOOLBAR_ID;
-
-  const lens = document.createElement("button");
-  lens.id = "ytr-lens-toggle";
-  lens.type = "button";
-  lens.className = "ytr-lens-toggle";
-  lens.dataset.lensToggle = "1";
-  lens.textContent = "◎ Lectures"; // static label -> textContent (doc glyph)
-  lens.title = "Courses & talks over 3 minutes · Shorts hidden";
-  lens.setAttribute("aria-pressed", lensFilterOn ? "true" : "false");
-  bar.appendChild(lens);
-
-  // The quiet hint beside the pill (Step 24 — doc's .find-hint). Static text;
-  // visibility is PURE CSS keyed on the data-ytr-lens html attribute that
-  // setLensFilter flips (shown only while the lens is ON), so no JS show/hide
-  // state can ever desync across SPA nav / tabs / master-off.
-  const hint = document.createElement("span");
-  hint.className = "ytr-find-hint";
-  hint.textContent = "Courses & talks over 3 minutes · Shorts hidden";
-  bar.appendChild(hint);
-
-  host.insertBefore(bar, host.firstChild);
-}
-
-function removeSearchToolbar() {
-  const bar = document.getElementById(SEARCH_TOOLBAR_ID);
-  if (bar) bar.remove();
-  // K3: leaving search / master-off tears down the search chrome — stop the
-  // re-decoration observer here too (the twin of the ··· purge below).
-  searchDecorateObserver.disconnect();
-}
-
-// Stamp the "Shorts" filter chip so CSS section 14a can hide it. CSS can't
-// text-match, so JS marks the chip whose label trims to "Shorts". Idempotent.
-function stampShortsChip(root) {
-  root
-    .querySelectorAll("yt-chip-cloud-chip-renderer:not([data-ytr-shorts-chip])")
-    .forEach((chip) => {
-      const label = (chip.textContent || "").trim().toLowerCase();
-      if (label === "shorts") chip.setAttribute("data-ytr-shorts-chip", "1");
-    });
-}
-
 // Session N (perf): stamp data-ytr-shorts-section on the search containers that
 // hold a Shorts shelf, so CSS section 14b can collapse them with a plain
 // attribute match instead of a :has() whose subject is the whole result list.
+// Session O: this is one of the two survivors of the search-code strip — it is
+// now called from restampBlocked() on the nav-driven reapplyBlockedSweep()
+// cadence, NOT from a decorate pass or an observer.
 // (§14b carries the full why; §8a's comment already had the rule — never make a
 // large, constantly-mutating container a :has() subject — and 14b was breaking
 // it on the one page that streams hardest.)
@@ -2373,139 +2677,6 @@ function stampShortsSections(root) {
   });
   return changed;
 }
-
-// Returns true when settled (nothing changed + nothing pending), mirroring
-// decorateSubscriptions, so the retry can stop early (#5). A result whose
-// duration overlay hasn't hydrated (or is live/upcoming -> null) stays pending,
-// so the lens flag is never skipped by an early exit.
-function decorateSearch() {
-  if (!reworkEnabled) return true; // master off -> plain YouTube (settled)
-  const root = searchRoot();
-  if (!root) return true; // off-page; the retry handles teardown
-
-  stampShortsChip(root);
-
-  let changed = false;
-  let pending = false;
-  // Session N: the §14b collapse stamp (was a :has() on the result list itself).
-  if (stampShortsSections(root)) changed = true;
-  const rows = root.querySelectorAll("ytd-video-renderer");
-  if (rows.length === 0) pending = true; // results not hydrated yet
-  rows.forEach((row) => {
-    // Phase 3: block stamp — every tick so a live blocklist change is reflected
-    // and lazy-loaded results get stamped inside the retry window. Display-only:
-    // CSS §14 hides [data-ytr-blocked]; never reorders. Count only a real
-    // transition as "changed" (the decorateHome pattern) so the retry keeps
-    // ticking while blocks are still being applied — e.g. a single-channel
-    // search re-fetches its rows when a result is removed, and those replaced
-    // rows must still get stamped before the retry settles.
-    const ck = searchRowChannelKey(row);
-    const shouldBlock = !!(ck && blockedCache[ck]);
-    if (shouldBlock !== row.hasAttribute("data-ytr-blocked")) {
-      row.toggleAttribute("data-ytr-blocked", shouldBlock);
-      changed = true;
-    }
-    // Duration -> lens flag. Re-evaluate until a real duration is read (the
-    // overlay hydrates late); only set the one-shot flag once we've parsed a
-    // duration, so a too-early null read doesn't permanently skip the row.
-    if (!row.getAttribute(SEARCH_FLAG)) {
-      const secs = resultDurationSeconds(row);
-      if (secs !== null) {
-        if (secs > 0 && secs < SHORT_CLIP_MAX_SECONDS)
-          row.setAttribute("data-ytr-short-clip", "1");
-        row.setAttribute(SEARCH_FLAG, "1"); // parsed -> stop re-reading
-        changed = true;
-      } else {
-        pending = true; // overlay not hydrated (or live/upcoming) -> re-read
-      }
-    }
-    // Video id (best-effort) — stamped once.
-    if (!row.getAttribute("data-ytr-vid")) {
-      const vid = searchRowVideoId(row);
-      if (vid) {
-        row.setAttribute("data-ytr-vid", vid);
-        changed = true;
-      } else {
-        pending = true;
-      }
-    }
-  });
-
-  // Session H: channel RESULTS (ytd-channel-renderer) carry the same block stamp
-  // — once its channel is blocked, the channel result itself leaves search too,
-  // so "that channel's rows vanish from search" includes this row.
-  // (Session L: no ··· chip is injected here any more — Block now rides
-  // YouTube's OWN ⋮ menu; see "Block from the native ⋮ menu" below.)
-  const channelRows = root.querySelectorAll("ytd-channel-renderer");
-  channelRows.forEach((row) => {
-    const ck = searchRowChannelKey(row); // same normalizeChannelKey chain
-    const shouldBlock = !!(ck && blockedCache[ck]);
-    if (shouldBlock !== row.hasAttribute("data-ytr-blocked")) {
-      row.toggleAttribute("data-ytr-blocked", shouldBlock);
-      changed = true;
-    }
-  });
-
-  // Delegated capture-phase click, attached once (beat result navigation).
-  if (!root.dataset.ytrSearchWired) {
-    root.addEventListener("click", onSearchClick, true);
-    root.dataset.ytrSearchWired = "1";
-  }
-
-  if (!document.getElementById(SEARCH_TOOLBAR_ID)) {
-    mountSearchToolbar(root);
-    if (document.getElementById(SEARCH_TOOLBAR_ID)) changed = true;
-    else pending = true;
-  }
-  return !changed && !pending;
-}
-
-// Capture-phase delegated click for our injected search controls. Session L
-// removed the per-row ··· chip (Block moved into YouTube's own ⋮ menu), so the
-// only injected control left on search is the Lectures lens toggle. Native
-// result clicks pass straight through.
-function onSearchClick(e) {
-  const t = e.target;
-  if (!t || !t.closest) return;
-
-  // 1. Lectures lens toggle.
-  if (t.closest("[data-lens-toggle]")) {
-    e.preventDefault();
-    e.stopPropagation();
-    setLensFilter(!lensFilterOn);
-    return;
-  }
-}
-
-// Search hydrates late and lazy-loads more results on scroll: bounded retry on
-// mount/nav (the flag makes re-runs cheap). Off search -> tear down our chrome.
-const decorateSearchWithRetry = makeBoundedRetry(
-  () => {
-    if (!searchRoot()) {
-      if (document.getElementById(SEARCH_TOOLBAR_ID) || lensFilterOn) {
-        removeSearchToolbar();
-        setLensFilter(false);
-      }
-      searchDecorateObserver.disconnect(); // K3: off search -> stop watching
-      return true;
-    }
-    // "idle" once settled so the retry stops ~900ms after results stabilize;
-    // false (keep ticking) while overlays/results still hydrate.
-    const done = decorateSearch();
-    // K3: keep watching for late (scroll-continuation) rows. connect() no-ops
-    // when master is off (shouldObserve gate), so a master-off tick can't
-    // re-attach after removeSearchToolbar cleared it.
-    searchDecorateObserver.connect();
-    return done ? "idle" : false;
-  },
-  300,
-  4000,
-  3
-);
-
-window.addEventListener("yt-rework:locationchange", decorateSearchWithRetry);
-window.addEventListener("popstate", decorateSearchWithRetry);
-window.addEventListener("yt-navigate-finish", decorateSearchWithRetry);
 
 // --- Phase 2: Peek — the algorithm on request (display-only) ------------------
 // A session-only reveal on the Library header. setPeek flips data-ytr-peek on
@@ -2682,12 +2853,33 @@ function blockCreator(key) {
 // to a ytd-video-renderer, resolved through normalizeChannelKey (@handle / UC… /
 // legacy). Fail-quiet: null -> not block-trackable.
 function searchRowChannelKey(row) {
-  return subsRowChannelKey(row);
+  // Session P: routed through blockRowChannelKey so a lockup search row (whose
+  // channel link can be absolute) resolves the SAME key the injected Block row
+  // is built from — a block must hide exactly the rows it was offered on.
+  return blockRowChannelKey(row);
 }
 
 // Re-stamp data-ytr-blocked wherever recommendations render (search results +
 // home rows) from the live blockedCache. Called after a block/unblock and from
 // the blockedChanged onChanged diff — CSS hides the stamped rows.
+// Session O: this is ALSO the only remaining stamp pass on /results — search
+// has no decorate pass and no observer any more — so the Shorts-section
+// collapse stamp (§14b) rides along here on the same cadence.
+// Never a Block row, never a block stamp — whatever tag the row is rendered as.
+// v1.1 spelled the playlist rule as "one tag we omit" (ytd-playlist-video-
+// renderer). Current builds render PLAYLIST rows as yt-lockup-view-model too
+// (confirmed live 2026-08-16 — the menu inspected there WAS a playlist row's),
+// the very same tag search and home use, so a tag-level exclusion no longer
+// holds the line. The rule is a CONTEXT now: inside a playlist listing or the
+// watch-page queue, a row is somebody's course material and is left alone.
+const BLOCK_CONTEXT_EXCLUDE_SELECTOR = [
+  "ytd-playlist-video-renderer",
+  "ytd-playlist-video-list-renderer",
+  "yt-playlist-video-list-view-model",
+  "ytd-playlist-panel-renderer", // the watch-page queue
+  'ytd-browse[page-subtype="playlist"]',
+].join(",");
+
 function restampBlocked() {
   // Gate the stamp on the master switch: with the rework off a stray sweep tick
   // (or a cross-tab onChanged) must CLEAR data-ytr-blocked, never re-add it —
@@ -2695,17 +2887,33 @@ function restampBlocked() {
   const on = reworkEnabled;
   const sr = searchRoot();
   if (sr) {
-    sr.querySelectorAll("ytd-video-renderer, ytd-channel-renderer").forEach(
+    // Session P: current builds render some/all search results as
+    // yt-lockup-view-model instead of ytd-video-renderer. The native ⋮ now
+    // offers Block on those rows, so "offered" only means something if the
+    // stamp reaches them too (CSS §17 hides both tags under ytd-search).
+    sr.querySelectorAll(
+      "ytd-video-renderer, ytd-channel-renderer, yt-lockup-view-model"
+    ).forEach(
       (row) => {
         const ck = searchRowChannelKey(row);
         row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
       }
     );
+    // Survivor B: the §14b Shorts-section collapse stamp. Toggles (never
+    // one-shot) so a section YouTube re-uses for a Shorts-free query loses it.
+    // Master off -> clear, same rule as the block stamp above.
+    if (on) stampShortsSections(sr);
+    else
+      sr.querySelectorAll("[" + SHORTS_SECTION_FLAG + "]").forEach((el) =>
+        el.removeAttribute(SHORTS_SECTION_FLAG)
+      );
   }
   const hb = homeBrowse();
   if (hb) {
     hb.querySelectorAll("ytd-rich-item-renderer").forEach((row) => {
-      const ck = row.getAttribute("data-ytr-chan") || subsRowChannelKey(row);
+      // Session P: blockRowChannelKey, the SAME resolver the injected Block row
+      // is built from — offer and hide must never disagree about a row's key.
+      const ck = row.getAttribute("data-ytr-chan") || blockRowChannelKey(row);
       row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
     });
   }
@@ -2720,12 +2928,28 @@ function restampBlocked() {
   // a channel's own page (navigating there is deliberate; emptying it helps
   // nobody) — current builds render neither surface with these tags, but the
   // stamp must not depend on that staying true.
+  // Session P: yt-lockup-view-model joins them. BLOCK_ROW_SELECTOR offers Block
+  // on a lockup ANYWHERE (search, home, watch sidebar, shelves), but the stamp
+  // used to reach lockups only under ytd-search — so on every other surface the
+  // menu promised something that visibly did nothing. Same closest() exclusions,
+  // and the same blockRowChannelKey resolver the offer itself uses.
   document
-    .querySelectorAll("ytd-compact-video-renderer, ytd-grid-video-renderer")
+    .querySelectorAll(
+      "ytd-compact-video-renderer, ytd-grid-video-renderer, yt-lockup-view-model"
+    )
     .forEach((row) => {
-      if (row.closest('ytd-browse[page-subtype="subscriptions"], ytd-browse[page-subtype="channels"]'))
+      // Excluded contexts don't just skip — they UN-stamp. §17 hides wherever
+      // the attr lands, and YouTube may recycle a stamped node into a playlist
+      // or subs subtree across SPA navs; clearing here makes "a block never
+      // hides your own lectures" hold by construction, not by trust.
+      if (
+        row.closest('ytd-browse[page-subtype="subscriptions"], ytd-browse[page-subtype="channels"]') ||
+        row.closest(BLOCK_CONTEXT_EXCLUDE_SELECTOR)
+      ) {
+        row.removeAttribute("data-ytr-blocked");
         return;
-      const ck = row.getAttribute("data-ytr-chan") || subsRowChannelKey(row);
+      }
+      const ck = row.getAttribute("data-ytr-chan") || blockRowChannelKey(row);
       row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
     });
 }
@@ -2736,6 +2960,14 @@ function restampBlocked() {
 // them. The cadence outlasts that reflow regardless of its exact timing (it
 // does NOT settle early like the decorate retries). Cheap + idempotent;
 // display-only, never reorders. Runs off-page as harmless no-ops.
+//
+// ponytail: this ~4.8s nav-driven cadence is now the ONLY thing stamping
+// /results (Session O removed the search observer + retry so search runs at
+// native speed). Ceiling: a blocked channel's rows — or a Shorts shelf — that
+// YouTube appends as a scroll CONTINUATION more than ~5s after the navigation
+// will not be stamped until the next navigation. Accepted: the first screenful
+// (which is what anyone actually sees) is covered, and the alternative is the
+// MutationObserver on the search subtree that made the page unusable.
 let blockedSweepTimer = null;
 function reapplyBlockedSweep() {
   restampBlocked();
@@ -2755,6 +2987,7 @@ function reapplyBlockedSweep() {
 // (they carry no LearnTube chrome — only the block stamp), so run the sweep on
 // every navigation. Its ~4.8s cadence also covers those rows hydrating late.
 window.addEventListener("yt-rework:locationchange", reapplyBlockedSweep);
+window.addEventListener("popstate", reapplyBlockedSweep);
 window.addEventListener("yt-navigate-finish", reapplyBlockedSweep);
 
 // --- Session L: Block from YouTube's OWN ⋮ menu -------------------------------
@@ -2786,8 +3019,46 @@ window.addEventListener("yt-navigate-finish", reapplyBlockedSweep);
 // path the v1.1 chip used, so the popup's Blocked list and its ✕ unblock are
 // untouched.
 
+// Session P: the pipeline above was written against ONE menu generation — the
+// Polymer `tp-yt-iron-dropdown > ytd-menu-popup-renderer` dropdown. Current
+// YouTube builds render a video row's ⋮ as the Wiz sheet instead
+// (`yt-sheet-view-model` / `yt-contextual-sheet-layout` > `yt-list-view-model` >
+// `yt-list-item-view-model`), still parented in ytd-popup-container. On that
+// generation openNativeMenu() found no iron-dropdown, returned null, and the
+// injection bailed on its FIRST line — silently, every time. Both generations
+// are now supported end to end (detect / inject / style / close).
+//
+// Every bail is still fail-quiet for the USER, but no longer invisible to us:
+// blockDebug() logs one console.debug line per bail so a live test says exactly
+// where it stopped. It de-dupes consecutive identical reasons — the observer
+// re-runs the injection on every popup mutation, and an undeduped "no open
+// menu" would bury the console.
+//
+// DELIBERATELY UNGATED and at console.debug level: this trail is the owner's
+// explicit ask after a silent bail cost them a release, and Chrome hides the
+// debug level unless you turn Verbose on — so it is invisible to a normal user
+// and one filter-click away for us. `localStorage.ytrDebug = "1"` promotes the
+// same lines to console.log for a session where Verbose is inconvenient.
+let lastBlockDebug = "";
+function blockDebug(reason) {
+  if (reason === lastBlockDebug) return;
+  lastBlockDebug = reason;
+  try {
+    let loud = false;
+    try {
+      loud = localStorage.getItem("ytrDebug") === "1";
+    } catch (_) {
+      // storage blocked (some embeds) -> stay on the quiet path
+    }
+    (loud ? console.log : console.debug)("[LearnTube] block-menu:", reason);
+  } catch (_) {
+    // a console-less context must never break the menu
+  }
+}
+
 const NATIVE_BLOCK_ITEM_CLASS = "ytr-native-block";
 const NATIVE_BLOCK_SEP_CLASS = "ytr-native-block-sep";
+const NATIVE_BLOCK_WIZ_CLASS = "ytr-native-block--wiz";
 
 // Every element YouTube uses as a "video row" across the surfaces that ship a
 // per-row ⋮ (search results, home/subscriptions lockups + rich items, watch-page
@@ -2806,6 +3077,9 @@ const BLOCK_ROW_SELECTOR = [
 // user's OWN course (the Library is built from playlists), so offering "block
 // this channel" on a lecture row invites hiding your own material. No Block row
 // inside playlist rows, and §17 never stamps/hides them either.
+// Session P: that tag-level exclusion is no longer enough — see
+// BLOCK_CONTEXT_EXCLUDE_SELECTOR above, which enforces the playlist rule by
+// CONTEXT now that playlist rows render as lockups too.
 
 // Anything YouTube renders a ⋮ trigger as, across builds.
 const BLOCK_TRIGGER_SELECTOR =
@@ -2824,6 +3098,53 @@ let lastMenuRow = null;
 let lastMenuAt = 0;
 const MENU_TRIGGER_MAX_AGE_MS = 4000;
 
+// The channel key for a row about to get a Block offer. subsRowChannelKey covers
+// every row that links its channel with a root-relative href — which is most of
+// them, both generations. Session P adds ONE fallback for the lockup rows search
+// and home now ship: scan every anchor in the row through normalizeChannelKey
+// (which resolves ABSOLUTE hrefs too, via new URL()), and take the first that
+// yields a key. /watch, /playlist and /shorts links all normalize to null, so
+// the fallback can only ever return a real channel.
+// Injection and the click-time re-verify MUST use this same function, or the
+// fail-closed comparison in onNativeBlockActivate would reject its own key.
+//
+// The fallback is scoped to the row's BYLINE / metadata area, never the whole
+// row: a search result's description snippet can contain a channel mention that
+// links to somebody ELSE, and blocking the channel a video merely talks about
+// would be a wrong-channel block — the exact failure the fail-closed re-verify
+// exists to prevent. Scoped out, it can't happen in the first place.
+const BLOCK_META_SCOPE_SELECTOR = [
+  ".yt-lockup-metadata-view-model__metadata",
+  ".ytLockupMetadataViewModelMetadata",
+  ".yt-content-metadata-view-model-wiz",
+  "#channel-info",
+  "#byline-container",
+  "ytd-channel-name",
+  "#avatar-link",
+  ".yt-lockup-view-model__content-image",
+].join(",");
+
+function blockRowChannelKey(row) {
+  if (!row) return null;
+  // Byline/metadata FIRST — it is the row's own channel by construction, and it
+  // resolves absolute hrefs (via normalizeChannelKey's new URL()) that
+  // subsRowChannelKey's ^="/@" prefix selectors would miss on a lockup.
+  const scopes = row.querySelectorAll(BLOCK_META_SCOPE_SELECTOR);
+  for (let i = 0; i < scopes.length; i++) {
+    const anchors = scopes[i].querySelectorAll("a[href]");
+    for (let j = 0; j < anchors.length; j++) {
+      const ck = normalizeChannelKey(anchors[j].getAttribute("href"));
+      if (ck) return ck; // /watch, /playlist, /shorts all normalize to null
+    }
+  }
+  // ponytail: only if the row ships none of those containers do we fall back to
+  // the row-wide scan — which CAN, on a build we haven't seen, pick a channel
+  // mentioned in a description snippet. The fail-closed re-verify in
+  // onNativeBlockActivate still guarantees the row blocks what its label was
+  // built from; it just can't guarantee the byline is what it read.
+  return subsRowChannelKey(row);
+}
+
 function rememberMenuTrigger(e) {
   const t = e.target;
   if (!t || !t.closest) return;
@@ -2840,6 +3161,7 @@ function rememberMenuTrigger(e) {
   const row = t.closest(BLOCK_ROW_SELECTOR);
   const isTrigger =
     !!row &&
+    !row.closest(BLOCK_CONTEXT_EXCLUDE_SELECTOR) && // never a playlist/queue row
     !t.closest("a[href]") &&
     !t.closest(BLOCK_TRIGGER_EXCLUDE_SELECTOR) &&
     !!t.closest(BLOCK_TRIGGER_SELECTOR);
@@ -2848,6 +3170,25 @@ function rememberMenuTrigger(e) {
   // menu) would resolve to a channel it has nothing to do with.
   lastMenuRow = isTrigger ? row : null;
   lastMenuAt = isTrigger ? Date.now() : 0;
+  if (row) {
+    lastBlockDebug = ""; // a new attempt starts a fresh de-dupe window
+    blockDebug(
+      isTrigger
+        ? "armed row <" +
+            row.tagName.toLowerCase() +
+            "> chan=" +
+            (blockRowChannelKey(row) || "none")
+        : "click inside <" +
+            row.tagName.toLowerCase() +
+            "> was not a menu trigger (link / excluded / no button)"
+    );
+    // Session P belt: three direct passes after a trigger click. The observer
+    // normally beats them to it (both generations mount inside the container it
+    // watches), but a mutation burst that lands entirely inside its 30ms debounce
+    // window, or a menu that hydrates its items a beat after the sheet, would
+    // otherwise leave the row out. Idempotent (same guarded injection), bounded.
+    if (isTrigger) [60, 200, 500].forEach((ms) => setTimeout(tryInjectNativeBlockItem, ms));
+  }
 }
 document.addEventListener("click", rememberMenuTrigger, true);
 
@@ -2866,28 +3207,72 @@ function isDropdownOpen(d) {
   return true;
 }
 
-// The currently OPEN shared menu popup as { drop, list }, or null. Requires an
-// ytd-menu-popup-renderer specifically, so a dialog (Save to playlist, Share) or
-// a non-menu overlay never matches; and skips the subscription notification
-// preferences menu, which rides the same popup but isn't a row's ⋮.
+// Second opinion on "open", independent of any Polymer property: real geometry
+// plus computed style. A dropdown that is detached, collapsed or faded out fails
+// this even if its `opened` flag lags — the one signal that can't drift with a
+// rename.
+function isElementVisible(el) {
+  if (!el || !el.getBoundingClientRect) return false;
+  const r = el.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return false;
+  const cs = getComputedStyle(el);
+  return (
+    cs.display !== "none" && cs.visibility !== "hidden" && cs.opacity !== "0"
+  );
+}
+
+// Menus we must never touch, in BOTH generations: the bell / Subscribed
+// notification-preferences menu rides the same shared popup but isn't a row's ⋮.
+// (Its Wiz form has no stable tag of its own, so the trigger-side exclusion —
+// a Subscribe/bell click clears lastMenuRow — plus the "no resolvable channel"
+// bail are what actually cover it there. Both are load-bearing; see §L belts.)
+const NATIVE_MENU_EXCLUDE_SELECTOR =
+  "ytd-notification-preference-toggle-renderer, ytd-subscription-notification-toggle-button-renderer, yt-notification-preference-sheet-view-model";
+
+// The currently OPEN shared menu popup as { drop, list, gen }, or null.
+//
+// ONE container path, two menu bodies. Live DOM inspection (2026-08-16 build,
+// logged-in profile) settled the question the first Session-P pass guessed at:
+// the Wiz sheet is HYBRID — it still rides a classic tp-yt-iron-dropdown inside
+// ytd-popup-container:
+//   ytd-popup-container > tp-yt-iron-dropdown > div
+//     > yt-sheet-view-model.ytSheetViewModelContextual
+//       > yt-contextual-sheet-layout > div.ytContextualSheetLayoutContentContainer
+//         > yt-list-view-model > yt-list-item-view-model ×5
+// So the dropdown (with Polymer `opened` / `close()`) stays the single unit of
+// "is a menu open", and only the BODY is feature-detected:
+//   gen "legacy" — ytd-menu-popup-renderer > #items
+//   gen "wiz"    — yt-contextual-sheet-layout > yt-list-view-model with
+//                  yt-list-item-view-model children. The contextual-sheet-layout
+//                  marker is load-bearing: the Save-to-playlist / Share DIALOGS
+//                  also render yt-list-view-model inside a sheet, and requiring
+//                  the CONTEXTUAL layout is what keeps our row out of them.
+// The list we append to is the ITEMS' OWN PARENT, not yt-list-view-model itself:
+// the Wiz list wraps its rows in an inner container, and appending a sibling of
+// that container would land our row outside the menu's own layout.
 function openNativeMenu() {
   const pc = popupContainer();
   if (!pc) return null;
   const drops = pc.querySelectorAll("tp-yt-iron-dropdown");
   for (let i = 0; i < drops.length; i++) {
     const d = drops[i];
+    // Two independent discriminators, because one dropdown can be open while
+    // another sits collapsed: Polymer's own `opened`, then real geometry.
     if (!isDropdownOpen(d)) continue;
+    if (!isElementVisible(d)) continue;
+    if (d.querySelector(NATIVE_MENU_EXCLUDE_SELECTOR)) continue;
     const menu = d.querySelector("ytd-menu-popup-renderer");
-    if (!menu) continue;
-    if (
-      menu.querySelector(
-        "ytd-notification-preference-toggle-renderer, ytd-subscription-notification-toggle-button-renderer"
-      )
-    )
-      continue; // the bell / Subscribed menu — not a video row's ⋮
-    const list =
-      menu.querySelector("#items") || menu.querySelector("tp-yt-paper-listbox");
-    if (list) return { drop: d, list: list };
+    if (menu) {
+      const list =
+        menu.querySelector("#items") || menu.querySelector("tp-yt-paper-listbox");
+      if (list) return { drop: d, list: list, gen: "legacy" };
+    }
+    const sheet = d.querySelector("yt-contextual-sheet-layout");
+    if (sheet) {
+      const items = sheet.querySelectorAll("yt-list-item-view-model");
+      const list = items.length ? items[items.length - 1].parentElement : null;
+      if (list) return { drop: d, list: list, gen: "wiz" };
+    }
   }
   return null;
 }
@@ -2924,11 +3309,29 @@ function closeNativeMenu() {
       }
     }
   });
-  if (!closed) {
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
-    );
-  }
+  if (closed) return;
+  // Live-verified 2026-08-16: BOTH generations ride tp-yt-iron-dropdown and its
+  // close() works, so this path is the drifted-build case only. Escape is what
+  // YouTube's own overlay manager listens for; composed:true so a listener bound
+  // inside a shadow root still sees it, keyup too since some handlers pair them.
+  // ponytail: no scrim-click belt — the live DOM has NO backdrop element at all
+  // while the menu is open (zero matches for tp-yt-iron-overlay-backdrop or any
+  // scrim class), so a belt aimed at one could only ever click the wrong node.
+  // If a future build has neither close() nor an Escape handler, the menu simply
+  // stays open after Block — the block itself already applied, and the next
+  // click anywhere dismisses it.
+  const esc = (type) =>
+    new KeyboardEvent(type, {
+      key: "Escape",
+      code: "Escape",
+      keyCode: 27,
+      which: 27,
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    });
+  document.dispatchEvent(esc("keydown"));
+  document.dispatchEvent(esc("keyup"));
 }
 
 function onNativeBlockActivate(e) {
@@ -2941,9 +3344,10 @@ function onNativeBlockActivate(e) {
   // for. Blocking is destructive-ish (the creator disappears from every feed),
   // so a stale or drifted pointer must fail closed, not block the wrong channel.
   const live = lastMenuRow && document.contains(lastMenuRow)
-    ? subsRowChannelKey(lastMenuRow)
+    ? blockRowChannelKey(lastMenuRow)
     : null;
   if (!ck || live !== ck) {
+    blockDebug("activate: refused — row re-verify gave " + live + ", row was built for " + ck);
     closeNativeMenu();
     removeNativeBlockItem();
     return;
@@ -2955,17 +3359,34 @@ function onNativeBlockActivate(e) {
   removeNativeBlockItem();
 }
 
-function buildNativeBlockItem(ck) {
+// gen is "legacy" (Polymer menu rows) or "wiz" (yt-list-item-view-model rows).
+// The two generations use different row metrics and, in Wiz, a leading icon
+// slot — so the built row carries a gen class and §17b dresses each to match
+// whichever menu it lands in. Structure only: still no innerHTML, and the
+// channel key still rides in dataset, never in markup.
+function buildNativeBlockItem(ck, gen) {
+  const wiz = gen === "wiz";
   const sep = document.createElement("div");
   sep.className = NATIVE_BLOCK_SEP_CLASS;
+  if (wiz) sep.classList.add(NATIVE_BLOCK_WIZ_CLASS);
   const item = document.createElement("div");
   item.className = NATIVE_BLOCK_ITEM_CLASS;
+  if (wiz) item.classList.add(NATIVE_BLOCK_WIZ_CLASS);
   item.setAttribute("role", "menuitem");
   item.setAttribute("tabindex", "0");
   item.dataset.ytrChan = ck; // channel key rides as data, never as markup
+  if (wiz) {
+    // Wiz rows lead with a 24px icon and align their text off it; a bare
+    // emoji-prefixed string would sit a gutter to the left of every sibling.
+    const icon = document.createElement("span");
+    icon.className = "ytr-native-block-icon";
+    icon.textContent = "🚫";
+    icon.setAttribute("aria-hidden", "true"); // decorative — the label carries it
+    item.appendChild(icon);
+  }
   const label = document.createElement("span");
   label.className = "ytr-native-block-label";
-  label.textContent = "🚫 Block this channel"; // no innerHTML anywhere
+  label.textContent = wiz ? "Block this channel" : "🚫 Block this channel";
   item.appendChild(label);
   item.addEventListener("click", onNativeBlockActivate);
   item.addEventListener("keydown", (ev) => {
@@ -2987,21 +3408,31 @@ function buildNativeBlockItem(ck) {
 // else — which is also what re-points it at a different row.
 function injectNativeBlockItem() {
   const open = openNativeMenu();
-  if (!open) return;
+  if (!open) {
+    blockDebug(
+      "no open menu found (no visible tp-yt-iron-dropdown holding a menu-popup-renderer or a contextual sheet)"
+    );
+    return;
+  }
   const list = open.list;
-  const existing = list.querySelector("." + NATIVE_BLOCK_ITEM_CLASS);
-  const dropOurs = () => {
-    if (existing) existing.remove();
-    const sep = list.querySelector("." + NATIVE_BLOCK_SEP_CLASS);
-    if (sep) sep.remove();
-    nativeBlockDrop = null;
-  };
-  if (!reworkEnabled) return dropOurs(); // master off -> plain YouTube
+  // DOCUMENT-wide, not list-scoped: a Wiz menu that re-renders can append a
+  // SECOND yt-list-view-model group, so our row from the previous render sits in
+  // a sibling list this pass would never see — and we'd inject a duplicate.
+  // Looking up (and dropping) our row wherever it is in the document makes
+  // "exactly one Block row exists" true by construction.
+  const existing = document.querySelector("." + NATIVE_BLOCK_ITEM_CLASS);
+  const dropOurs = () => removeNativeBlockItem();
+  if (!reworkEnabled) {
+    blockDebug("master switch is off — plain YouTube, no row");
+    return dropOurs();
+  }
   // Our row is already live in THIS still-open dropdown -> leave it alone.
   if (existing && nativeBlockDrop === open.drop) {
-    // Keep it last in case YouTube appended items of its own after ours.
-    if (existing.nextElementSibling) {
-      const sep = list.querySelector("." + NATIVE_BLOCK_SEP_CLASS);
+    // Keep it last, and in the CURRENT list — YouTube may have appended items of
+    // its own after ours, or re-rendered the menu into a fresh list group that
+    // our row is no longer part of. appendChild moves it either way.
+    if (existing.parentElement !== list || existing.nextElementSibling) {
+      const sep = document.querySelector("." + NATIVE_BLOCK_SEP_CLASS);
       if (sep) list.appendChild(sep);
       list.appendChild(existing);
     }
@@ -3014,25 +3445,51 @@ function injectNativeBlockItem() {
     !list.querySelector(
       "ytd-menu-service-item-renderer, ytd-menu-navigation-item-renderer, yt-list-item-view-model"
     )
-  )
+  ) {
+    blockDebug("menu shape unrecognised (" + open.gen + ") — no item rows in the list");
     return dropOurs();
+  }
 
   const row = lastMenuRow;
   const fresh =
     !!row &&
     document.contains(row) &&
     Date.now() - lastMenuAt < MENU_TRIGGER_MAX_AGE_MS;
-  const ck = fresh ? subsRowChannelKey(row) : null;
+  if (!fresh) {
+    blockDebug(
+      "no fresh row remembered — this menu wasn't opened from a video row's ⋮"
+    );
+    return dropOurs();
+  }
+  const ck = blockRowChannelKey(row);
   // No channel resolvable (menu opened from a non-video context, or the row's
   // channel link hasn't hydrated) -> don't inject. Already blocked -> nothing to
   // offer (the popup's Blocked list owns the unblock).
-  if (!ck || blockedCache[ck]) return dropOurs();
+  if (!ck) {
+    blockDebug("no channel link found in <" + row.tagName.toLowerCase() + ">");
+    return dropOurs();
+  }
+  if (blockedCache[ck]) {
+    blockDebug(ck + " is already blocked — nothing to offer");
+    return dropOurs();
+  }
 
   dropOurs(); // a stale row from a previous dropdown, if any
-  const built = buildNativeBlockItem(ck);
+  const built = buildNativeBlockItem(ck, open.gen);
   list.appendChild(built.sep);
   list.appendChild(built.item);
   nativeBlockDrop = open.drop;
+  blockDebug("injected into the " + open.gen + " menu for " + ck);
+}
+
+// The one guarded entry point: the observer and the post-click timers both go
+// through it, so an injection failure can never surface as a broken native menu.
+function tryInjectNativeBlockItem() {
+  try {
+    injectNativeBlockItem();
+  } catch (err) {
+    blockDebug("threw: " + (err && err.message));
+  }
 }
 
 // Watch the shared popup container for the menu opening / re-rendering. Debounced
@@ -3048,25 +3505,40 @@ function wireNativeBlockMenu() {
   // masterChanged branch re-triggers this retry when the switch comes back on.
   if (!reworkEnabled) return true;
   const pc = popupContainer();
-  if (!pc) return false; // ytd-popup-container not hydrated yet -> retry
+  if (!pc) {
+    blockDebug("ytd-popup-container not hydrated yet — will retry");
+    return false; // -> retry
+  }
   nativeMenuObserver = new MutationObserver(() => {
     if (nativeMenuTimer) return;
     nativeMenuTimer = setTimeout(() => {
       nativeMenuTimer = null;
-      try {
-        injectNativeBlockItem();
-      } catch (_) {
-        // never let our injection surface as a broken native menu
-      }
+      tryInjectNativeBlockItem();
     }, 30);
   });
   nativeMenuObserver.observe(pc, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["aria-hidden", "style"],
+    attributeFilter: ["aria-hidden", "hidden", "style"],
   });
   return true;
+}
+
+// Master off: stop WATCHING, not just stop injecting. The observer fires on
+// every popup mutation for the whole session otherwise — real work for a switch
+// the user turned off. wireNativeBlockMenu is idempotent, so the master-on
+// branch simply re-wires (its `if (nativeMenuObserver) return true` guard is
+// what makes the re-wire free when it was never torn down).
+function unwireNativeBlockMenu() {
+  if (nativeMenuObserver) {
+    nativeMenuObserver.disconnect();
+    nativeMenuObserver = null;
+  }
+  if (nativeMenuTimer) {
+    clearTimeout(nativeMenuTimer);
+    nativeMenuTimer = null;
+  }
 }
 
 // ytd-popup-container is an app-level singleton that hydrates a beat after the
@@ -3924,15 +4396,27 @@ function renderFocusStrip(ctx) {
   // disabled ghosts in the strip). NOTE the pair is deliberately asymmetric:
   // Previous is positional (the row above), Next stays §4-deterministic (first
   // non-watched — the contract shared with the Library Continue row and the
-  // Course Resume button). When the two would resolve to the SAME video (the
-  // row above is also the first unwatched), Previous is suppressed — two pills
-  // pointing at one destination reads as a bug.
+  // Course Resume button).
+  //
+  // Session Q — the prev===next suppression is GONE (it was the "Previous never
+  // shows" bug). Watched-state only ever comes from the /playlist DOM scrape:
+  // the watch-side panel's resume overlay reads 0 (K1 documents this, and 15a
+  // display:none's #secondary so the measured fallback is 0 too), so finishing
+  // lecture N-1 and riding "Next lecture →" to N leaves N-1 stored watched:false
+  // until the user re-opens the playlist page. §4's first-non-watched then IS
+  // N-1 — i.e. prev === next in exactly the everyday sequential case, and the
+  // suppression hid Previous essentially always. Fix the symptom at the pill,
+  // not the semantics: show BOTH, keep §4 for Next (Library Continue / Course
+  // Resume must never disagree with it), and let the two title tooltips explain
+  // why they can land on the same lecture. Two pills to one destination is a far
+  // smaller surprise than a control the owner can never find.
   const next = courseNextLecture(ctx);
   const prev = coursePreviousLecture(ctx);
-  if (prev && !(next && next.videoId === prev.videoId)) {
+  if (prev) {
     const prevLink = makeEl("a", {
       className: "ytr-pill",
       text: "← Previous lecture",
+      attrs: { title: "Go back one lecture in this course" },
     });
     prevLink.href = resumeUrl(prev); // a URL only — never innerHTML
     right.append(prevLink);
@@ -3941,6 +4425,7 @@ function renderFocusStrip(ctx) {
     const go = makeEl("a", {
       className: "ytr-pill ytr-pill-next",
       text: "Next lecture →",
+      attrs: { title: "Jump to the first lecture you haven't finished" },
     });
     go.href = resumeUrl(next); // a URL only — never innerHTML
     right.append(go);
@@ -4308,7 +4793,7 @@ function removeSubsHeader() {
   if (bar) bar.remove();
   // Also shed the per-row injected controls (creator stars + ··· overflow). Their
   // CSS is gated on html.yt-rework, so on master-off an orphan would render as a
-  // raw default control — the Subscriptions twin of removeSearchToolbar.
+  // raw default control.
   // No-op once off Subscriptions (subsBrowse() null; the
   // controls left with the old page). decorateSubscriptions re-injects them
   // idempotently on the next master-on / re-visit.
@@ -4488,6 +4973,10 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
     togglesCache.startOnSubscriptions === true &&
     location.pathname === "/"
   ) {
+    // Session Q: flag the document so the storage.local seed's backfill (a
+    // separate async callback that does NOT see this early return) doesn't kick
+    // off playlist fetches for a page that is already navigating away.
+    documentDoomed = true;
     location.replace(location.origin + "/feed/subscriptions");
     return; // navigating away — nothing else to seed on this doomed document
   }
@@ -4499,8 +4988,8 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // Decorate Subscriptions if we hard-loaded straight onto /feed/subscriptions
   // (no-op elsewhere; bounded retry handles late hydration + lazy rows).
   decorateSubscriptionsWithRetry();
-  // Decorate search if we hard-loaded straight onto /results (no-op elsewhere).
-  decorateSearchWithRetry();
+  // (Session O: nothing to decorate on /results — search is native. The
+  // reapplyBlockedSweep() at the end of this seed carries its two stamps.)
   // Phase 2/3: the home decorate pass — stamps blocked rows on the native feed
   // (S6 off) and drives the Peek reveal; no-op when the Library is shown + not
   // peeking.
@@ -4514,6 +5003,9 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // …and stamp the surfaces with no decorate pass of their own (watch sidebar,
   // grid shelves) on a hard load.
   reapplyBlockedSweep();
+  // Session Q: see the note on the storage.local seed — whichever of the two
+  // lands second actually runs it.
+  backfillMissingPlaylistScrapes();
 });
 
 // Seed the progress + read + archived caches (storage.local) so the first
@@ -4523,6 +5015,7 @@ chrome.storage.local.get(
   { [PROGRESS_KEY]: {}, [READ_KEY]: {}, [ARCHIVED_KEY]: {} },
   (res) => {
     progressCache = res[PROGRESS_KEY] || {};
+    progressSeeded = true;
     readCache = res[READ_KEY] || {};
     archivedCache = res[ARCHIVED_KEY] || {};
     pruneOrphanProgress(); // drop records orphaned by a delete in a prior session
@@ -4533,6 +5026,10 @@ chrome.storage.local.get(
     refreshSubsArchived(); // hide archived rows if on Subscriptions
     markCurrentWatchRead(); // record a hard load straight onto /watch
     roomTickWithRetry(); // stamp the room + mount the focus strip on /watch
+    // Session Q: top up playlists filed before background hydration existed.
+    // Fires from whichever seed lands SECOND (the guard inside needs both), and
+    // only ever once per document.
+    backfillMissingPlaylistScrapes();
   }
 );
 
@@ -4631,29 +5128,30 @@ chrome.storage.onChanged.addListener((changes, area) => {
       if (!reworkEnabled) {
         removeSubsHeader();
         setVipFilter(false);
-        removeSearchToolbar();
-        setLensFilter(false);
         setPeek(false);
         // Clear the remembered-view stamp too (setPeek only drops data-ytr-peek)
         // so master-off leaves no data-ytr-* on <html>.
         document.documentElement.removeAttribute("data-ytr-peek-view");
         // Master-off is plain YouTube: strip every remaining data-ytr-* element
-        // stamp (block/chan/vid/read/short-clip/search + the Subscriptions
-        // flags + the Shorts chip) so nothing is left behind. The decorate
-        // passes early-return while off and wouldn't otherwise clear these; all
-        // are re-applied on master-on.
+        // stamp (block/chan/vid/read + the Subscriptions flags + the Shorts
+        // section collapse) so nothing is left behind. The decorate passes
+        // early-return while off and wouldn't otherwise clear these; all are
+        // re-applied on master-on. (Session O: the search-only stamps —
+        // short-clip / search / shorts-chip — are gone with the search code.)
         const STAMPS = [
           "data-ytr-blocked", "data-ytr-chan", "data-ytr-vid", "data-ytr-read",
-          "data-ytr-short-clip", "data-ytr-search", "data-ytr-mailrow",
-          "data-ytr-star", "data-ytr-archived", "data-ytr-shorts-chip",
+          "data-ytr-mailrow", "data-ytr-star", "data-ytr-archived",
           "data-ytr-shorts-section",
         ];
         document
           .querySelectorAll(STAMPS.map((a) => "[" + a + "]").join(","))
           .forEach((el) => STAMPS.forEach((a) => el.removeAttribute(a)));
         closeOverflowMenus();
-        // …and our row inside YouTube's own ⋮ menu, if one is open right now.
+        // …and our row inside YouTube's own ⋮ menu, if one is open right now —
+        // plus the popup observer itself (Session P): master off means we stop
+        // watching, not just stop injecting.
         removeNativeBlockItem();
+        unwireNativeBlockMenu();
         // Session M: …and the playlist header's "＋ Add to LearnTube" button
         // (+ its panel and dismiss listeners). Master off = plain YouTube.
         removePlaylistAdd();
@@ -4667,12 +5165,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
       mountLearningHome();
       renderLearningHome();
       decorateSubscriptionsWithRetry();
-      decorateSearchWithRetry();
       decorateHomeWithRetry();
+      // Session O: master back ON re-seeds the two /results stamps (blocked
+      // rows + the §14b Shorts-section collapse) — search has no decorate pass.
+      reapplyBlockedSweep();
       roomTickWithRetry();
       refreshSubsReadState();
       refreshSubsArchived();
       refreshSubsStars();
+      // Session Q: the seed-time backfill refuses to run while master is off (it
+      // would burn its one shot on no-op fetches), so ask again on the way back
+      // in. Idempotent — backfillRan makes every later call a no-op.
+      backfillMissingPlaylistScrapes();
       return;
     }
 

@@ -51,8 +51,11 @@ switch, with a per-surface switch for any piece you want handed back.
 - **Fewer distractions everywhere.** Watch-page "up next" suggestions, comments,
   and end-screen cards are removed — on a lecture inside one of your topics, an
   **Up next ▾** pill brings back just the coming lectures' titles, on demand —
-  the masthead is reclaimed down to [logo · search · account], and search gains
-  an optional "Lectures" lens that hides clips under three minutes.
+  and the masthead is reclaimed down to [logo · search · account].
+- **Search is left alone.** LearnTube adds no layout, no filter and no chrome to
+  the results page: you get YouTube's own search, at YouTube's own speed. The
+  only two things that carry over are the site-wide Shorts hiding and your
+  blocked channels.
 
 Everything is display-only: LearnTube **never reorders your feed or touches
 YouTube's recommendation algorithm.** It only hides, restyles, and adds its own
