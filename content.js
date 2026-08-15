@@ -242,12 +242,15 @@ function mutateTopics(fn, done) {
     fn(settings);
     chrome.storage.sync.set({ [SETTINGS_KEY]: settings }, () => {
       // Surface (but tolerate) a write failure; storage stays source of truth.
-      if (chrome.runtime.lastError) {
+      const failed = !!chrome.runtime.lastError;
+      if (failed) {
         console.warn("[yt-rework] topics write failed:", chrome.runtime.lastError);
       }
       // Optional completion hook (used by adoptScrapedTopicNames' in-flight
-      // latch); runs on success or failure so the latch always clears.
-      if (done) done();
+      // latch); runs on success or failure so the latch always clears. Passes
+      // whether the write actually landed (sync quota etc.) — lastError is only
+      // readable here, so callers showing a confirmation depend on this flag.
+      if (done) done(!failed);
     });
   });
 }
@@ -270,6 +273,64 @@ function addVideoToTopic(topicId, videoId) {
       t.videos.push({ id: videoId });
     }
   });
+}
+
+// --- The ONE playlist->topic writer ------------------------------------------
+// Session M extracted these two out of handleAction (the Library's paste flow)
+// so every surface that can file a playlist — the Library's "+ Add" row, the
+// first-run empty state, and the playlist page's "＋ Add to LearnTube" button —
+// goes through the SAME mutation. Both are read-modify-write via mutateTopics
+// (masterEnabled / stars / videos are never clobbered) and both de-dupe by
+// playlist id. Neither re-renders: storage.onChanged drives every surface.
+// The optional `done(ok)` hook reports whether the topic was actually found and
+// written: a topic DELETED in another synced tab is a silent no-op inside `fn`,
+// and a caller that shows a confirmation (Session M's "Added ✓") must not claim
+// success for a write that never happened. Callers that don't care omit it.
+function addPlaylistToTopic(topicId, listId, done) {
+  if (!topicId || !listId) {
+    if (done) done(false);
+    return;
+  }
+  let ok = false;
+  mutateTopics(
+    (s) => {
+      const t = s.topics.find((x) => x.id === topicId);
+      if (!t) return; // gone (deleted elsewhere) -> write nothing, report false
+      t.playlists = Array.isArray(t.playlists) ? t.playlists : [];
+      if (!t.playlists.some((p) => p && p.id === listId))
+        t.playlists.push({ id: listId });
+      ok = true; // present (already-there counts: the end state is what we want)
+    },
+    (wrote) => {
+      if (done) done(ok && wrote);
+    }
+  );
+}
+
+// Create a NEW topic around a playlist. An empty `name` is deliberate, not a
+// bug: the topic then ADOPTS the playlist's real scraped title (Step 21 /
+// adoptScrapedTopicNames) — "never an invented one".
+// `done(ok)` as above — a creation can only fail on a missing id, but the two
+// writers keep the same shape so callers can treat them identically.
+function createTopicWithPlaylist(name, listId, done) {
+  if (!listId) {
+    if (done) done(false);
+    return;
+  }
+  const clean = (name || "").trim();
+  mutateTopics(
+    (s) => {
+      s.topics.push({
+        id: newTopicId(),
+        name: clean, // "" -> adopted from the scraped playlist title
+        playlists: [{ id: listId }],
+        videos: [],
+      });
+    },
+    (wrote) => {
+      if (done) done(wrote);
+    }
+  );
 }
 
 // --- Playlist id parsing -----------------------------------------------------
@@ -1566,14 +1627,8 @@ function handleAction(action, el) {
       showErr(el, "Couldn't read a playlist id");
       return;
     }
-    mutateTopics((s) => {
-      s.topics.push({
-        id: newTopicId(),
-        name: "", // adopted from the scraped playlist title — never invented
-        playlists: [{ id }],
-        videos: [],
-      });
-    });
+    // "" name -> adopted from the scraped playlist title, never invented.
+    createTopicWithPlaylist("", id); // the ONE writer (shared with Session M)
     if (input) input.value = "";
     showErr(el, "");
     return;
@@ -1649,12 +1704,7 @@ function handleAction(action, el) {
       showErr(el, "Couldn't read a playlist id");
       return;
     }
-    mutateTopics((s) => {
-      const t = s.topics.find((x) => x.id === topicId);
-      if (!t) return;
-      t.playlists = Array.isArray(t.playlists) ? t.playlists : [];
-      if (!t.playlists.some((p) => p.id === id)) t.playlists.push({ id });
-    });
+    addPlaylistToTopic(topicId, id); // the ONE writer (shared with Session M)
     if (input) input.value = "";
     showErr(el, "");
     return;
@@ -2977,6 +3027,433 @@ const wireNativeBlockMenuWithRetry = makeBoundedRetry(
 window.addEventListener("yt-rework:locationchange", wireNativeBlockMenuWithRetry);
 window.addEventListener("yt-navigate-finish", wireNativeBlockMenuWithRetry);
 
+// --- Session M: Add-to-LearnTube from the playlist page -----------------------
+// Until now a playlist could only be filed from the Library (paste a link) or
+// from the Subscriptions inbox (··· -> Save to topic). But the place you decide
+// "this is a course" is the playlist page itself — and opening it is ALSO what
+// triggers the Step-6 progress scrape, so filing it here means the bars are
+// already populated. Session M injects ONE button into YouTube's own playlist
+// header, next to "Play all":
+//
+//   ＋ Add to LearnTube      -> opens a small anchored panel: "Add to which
+//                               topic?", a row per topic, + New topic…
+//   ✓ In your Library        -> already filed; the panel shows WHICH topic(s)
+//                               and offers the topics it is NOT in yet.
+//
+// Every add routes through addPlaylistToTopic / createTopicWithPlaylist — the
+// SAME writers the Library's paste flow uses (extracted for this, not cloned),
+// so de-dupe, the unnamed-topic title adoption and the storage fan-out are
+// identical by construction. Nothing here re-renders: mutateTopics ->
+// storage.onChanged -> topicsChanged -> refreshPlaylistAddButton (+ the
+// Library's own re-render in every other open tab).
+//
+// This lives in NATIVE chrome, so like Session L's injected menu row it is
+// written to fail SILENT: every step feature-detects, and anything unrecognised
+// means we simply don't inject. The native header must never break because of
+// us. Master off -> the button and panel are removed outright.
+
+const PLAYLIST_ADD_ID = "ytr-pl-add";
+const PLAYLIST_ADD_WRAP_CLASS = "ytr-pl-add-wrap";
+
+// Both header generations YouTube currently ships, most specific first:
+//   (a) the newer page-header-view-model builds — the action row is a
+//       yt-flexible-actions-view-model holding Play all / Shuffle / ⋮;
+//   (b) the classic ytd-playlist-header-renderer (+ its old sidebar twin),
+//       whose buttons live in #top-level-buttons-computed / .metadata-action-bar.
+// The last entries are deliberate coarse fallbacks: appending to the header
+// root still puts our button IN the header, just on its own line. Same
+// drift-tolerance rule as scrapePlaylistTitle above.
+const PLAYLIST_ACTION_ROW_SELECTORS = [
+  "yt-page-header-view-model yt-flexible-actions-view-model .yt-flexible-actions-view-model-wiz__action-row",
+  "yt-page-header-view-model yt-flexible-actions-view-model",
+  "yt-page-header-view-model .page-header-view-model-wiz__page-header-headline-buttons",
+  "ytd-playlist-header-renderer #top-level-buttons-computed",
+  "ytd-playlist-header-renderer .metadata-action-bar",
+  "ytd-playlist-header-renderer #play-buttons",
+  "ytd-playlist-sidebar-primary-info-renderer #play-buttons",
+  "yt-page-header-view-model",
+  "ytd-playlist-header-renderer",
+  "ytd-playlist-sidebar-primary-info-renderer",
+];
+
+// The id this page files under — run through the SAME sanitizer the Library's
+// paste flow uses (parsePlaylistId ends in sanitizePlaylistId), so the key the
+// button compares against is provably identical to the key stored in
+// settings.topics. Null when the route has no usable list id.
+function currentPlaylistKey() {
+  return sanitizePlaylistId(currentListId());
+}
+
+// The dedicated playlist route only (the watch-page side panel keeps its own
+// header and is NOT a place to file a course from).
+function isPlaylistPage() {
+  return location.pathname === "/playlist" && !!currentPlaylistKey();
+}
+
+// ytd-page-manager keeps PREVIOUS ytd-browse instances around with [hidden],
+// and channel pages use the very same yt-page-header-view-model tag — so the
+// coarse fallback selectors can match a stale, invisible header. Mounting there
+// fails STICKILY (an invisible button that the fast path then idles on forever),
+// so a candidate inside a hidden browse, or with no layout box at all, is
+// rejected and the next selector is tried.
+function isVisibleHeaderCandidate(el) {
+  if (!el || el.closest("ytd-browse[hidden], [hidden]")) return false;
+  if (el.offsetParent !== null || el.getClientRects().length) return true;
+  // A display:contents host (the wiz custom elements often are) generates no
+  // layout box of its own yet still renders its children — don't reject it.
+  return getComputedStyle(el).display === "contents";
+}
+
+function playlistActionRow() {
+  for (let i = 0; i < PLAYLIST_ACTION_ROW_SELECTORS.length; i++) {
+    const nodes = document.querySelectorAll(PLAYLIST_ACTION_ROW_SELECTORS[i]);
+    for (let j = 0; j < nodes.length; j++) {
+      if (isVisibleHeaderCandidate(nodes[j])) return nodes[j];
+    }
+  }
+  return null;
+}
+
+// Every topic that already holds this playlist. De-dupe is by playlist id
+// ACROSS all topics — that is what decides the ✓ state of the button.
+function topicsWithPlaylist(listId) {
+  return topicsCache.filter((t) =>
+    (Array.isArray(t.playlists) ? t.playlists : []).some(
+      (p) => p && p.id === listId
+    )
+  );
+}
+
+function playlistAddWrap() {
+  return document.getElementById(PLAYLIST_ADD_ID);
+}
+
+// --- the anchored panel ------------------------------------------------------
+// Built fresh on every open (topics change under us), removed on close. The two
+// dismiss listeners are attached only while it is open and always torn down in
+// closePlaylistPanel, so nothing survives a navigation.
+
+function closePlaylistPanel(focusBtn) {
+  const wrap = playlistAddWrap();
+  const panel = wrap && wrap.querySelector(".ytr-pl-panel");
+  if (panel) panel.remove();
+  document.removeEventListener("mousedown", onPlaylistPanelOutside, true);
+  document.removeEventListener("keydown", onPlaylistPanelKeydown, true);
+  const btn = wrap && wrap.querySelector(".ytr-pl-add-btn");
+  if (btn) {
+    btn.setAttribute("aria-expanded", "false");
+    if (focusBtn) btn.focus();
+  }
+}
+
+function onPlaylistPanelOutside(e) {
+  const wrap = playlistAddWrap();
+  if (!wrap) return closePlaylistPanel(false);
+  if (wrap.contains(e.target)) return; // inside our button/panel -> not a dismiss
+  closePlaylistPanel(false);
+}
+
+function onPlaylistPanelKeydown(e) {
+  if (e.key !== "Escape") return;
+  const wrap = playlistAddWrap();
+  if (!wrap || !wrap.querySelector(".ytr-pl-panel")) return;
+  e.stopPropagation(); // ours to handle — don't also close a YouTube overlay
+  closePlaylistPanel(true);
+}
+
+// A 2s confirmation next to the button. One at a time (the pending timer is
+// cleared), and it never blocks — the write already went out.
+let playlistToastTimer = null;
+function showPlaylistAddToast(text) {
+  const wrap = playlistAddWrap();
+  if (!wrap) return;
+  const old = wrap.querySelector(".ytr-pl-toast");
+  if (old) old.remove();
+  if (playlistToastTimer) clearTimeout(playlistToastTimer);
+  const toast = document.createElement("div");
+  toast.className = "ytr-pl-toast";
+  toast.setAttribute("role", "status");
+  toast.textContent = text;
+  wrap.appendChild(toast);
+  playlistToastTimer = setTimeout(() => {
+    playlistToastTimer = null;
+    toast.remove();
+  }, 2000);
+}
+
+// Shared tail of both add paths: close, confirm, and re-scrape the playlist that
+// is ALREADY open so its progress lands without a reload (the retry merges into
+// the same record the Library reads).
+function afterPlaylistAdded() {
+  closePlaylistPanel(false);
+  showPlaylistAddToast("Added ✓");
+  scrapePlaylistPageWithRetry();
+}
+
+function buildPlaylistPanelRow(cls, mark, label) {
+  const node = document.createElement(cls === "item" ? "button" : "div");
+  node.className = "ytr-pl-row" + (cls === "item" ? " ytr-pl-item" : " ytr-pl-in");
+  if (cls === "item") node.type = "button";
+  if (mark) {
+    const m = document.createElement("span");
+    m.className = "ytr-pl-row-mark";
+    m.textContent = mark;
+    node.appendChild(m);
+  }
+  const t = document.createElement("span");
+  t.className = "ytr-pl-row-label";
+  t.textContent = label; // user data -> textContent, never innerHTML
+  node.appendChild(t);
+  return node;
+}
+
+function buildPlaylistPanel(listId) {
+  const panel = document.createElement("div");
+  panel.className = "ytr-pl-panel";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-label", "Add this playlist to a topic");
+
+  const inTopics = topicsWithPlaylist(listId);
+  const inIds = inTopics.map((t) => t.id);
+  const others = topicsCache.filter((t) => inIds.indexOf(t.id) === -1);
+
+  const title = document.createElement("div");
+  title.className = "ytr-pl-panel-title";
+  title.textContent = inTopics.length
+    ? "Already in your Library"
+    : "Add to which topic?";
+  panel.appendChild(title);
+
+  // Where it already is — read-only rows, so a second add is impossible.
+  inTopics.forEach((t) => {
+    panel.appendChild(buildPlaylistPanelRow("in", "✓", topicDisplayName(t)));
+  });
+
+  if (inTopics.length && others.length) {
+    const sub = document.createElement("div");
+    sub.className = "ytr-pl-panel-sub";
+    sub.textContent = "Also add to";
+    panel.appendChild(sub);
+  }
+
+  others.forEach((t) => {
+    const row = buildPlaylistPanelRow("item", "", topicDisplayName(t));
+    row.dataset.ytrTopic = t.id; // ids ride as data, never as markup
+    row.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      // The Library's own writer — and we only confirm on a write that really
+      // landed: the topic may have been deleted in another synced tab between
+      // this panel being built and the click.
+      addPlaylistToTopic(t.id, listId, (ok) => {
+        if (ok) afterPlaylistAdded();
+        else rebuildPlaylistPanel(); // topic vanished -> show the live truth
+      });
+    });
+    panel.appendChild(row);
+  });
+
+  // --- + New topic… ---------------------------------------------------------
+  const newBtn = document.createElement("button");
+  newBtn.type = "button";
+  newBtn.className = "ytr-pl-row ytr-pl-item ytr-pl-new-btn";
+  newBtn.textContent = "+ New topic…";
+
+  const form = document.createElement("div");
+  form.className = "ytr-pl-new";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "ytr-pl-input";
+  input.placeholder = "Topic name";
+  input.setAttribute("aria-label", "New topic name");
+  const ok = document.createElement("button");
+  ok.type = "button";
+  ok.className = "ytr-pl-ok";
+  ok.textContent = "Add";
+  form.appendChild(input);
+  form.appendChild(ok);
+
+  const confirmNew = (ev) => {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    // A blank name is allowed and meaningful: the new topic then adopts the
+    // playlist's real scraped title, exactly like the first-run paste flow.
+    createTopicWithPlaylist(input.value, listId, (ok) => {
+      if (ok) afterPlaylistAdded();
+      else rebuildPlaylistPanel();
+    });
+  };
+  ok.addEventListener("click", confirmNew);
+  input.addEventListener("keydown", (ev) => {
+    ev.stopPropagation(); // typing must not reach YouTube's global shortcuts
+    if (ev.key === "Enter") confirmNew(ev);
+  });
+
+  // With no topics at all there is nothing to choose from — go straight to the
+  // input (locked in the design: one less click on a first-run install).
+  const bare = topicsCache.length === 0;
+  if (!bare) {
+    newBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      newBtn.remove();
+      form.classList.add("is-open");
+      input.focus();
+    });
+    panel.appendChild(newBtn);
+  } else {
+    form.classList.add("is-open");
+  }
+  panel.appendChild(form);
+  return { panel: panel, input: bare ? input : null };
+}
+
+function openPlaylistPanel() {
+  const wrap = playlistAddWrap();
+  const listId = currentPlaylistKey();
+  if (!wrap || !listId) return;
+  if (wrap.querySelector(".ytr-pl-panel")) return closePlaylistPanel(true); // toggle
+  const built = buildPlaylistPanel(listId);
+  wrap.appendChild(built.panel);
+  const btn = wrap.querySelector(".ytr-pl-add-btn");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+  // Attached on mousedown (not click): the click that OPENED the panel has
+  // already delivered its mousedown, so this can never close it immediately.
+  document.addEventListener("mousedown", onPlaylistPanelOutside, true);
+  document.addEventListener("keydown", onPlaylistPanelKeydown, true);
+  if (built.input) built.input.focus();
+}
+
+// Re-render an OPEN panel from the live topicsCache (a topic deleted / added /
+// renamed in another synced tab, or a write that found nothing to write). Never
+// fires while the new-topic input is showing — that would eat what the user is
+// typing; that path re-reads the truth when they confirm anyway. No-op when no
+// panel is open, so the onChanged branch can call it unconditionally.
+function rebuildPlaylistPanel() {
+  const wrap = playlistAddWrap();
+  const panel = wrap && wrap.querySelector(".ytr-pl-panel");
+  if (!panel) return;
+  if (panel.querySelector(".ytr-pl-new.is-open")) return; // mid-typing -> leave it
+  const listId = currentPlaylistKey();
+  if (!listId) return closePlaylistPanel(false);
+  const built = buildPlaylistPanel(listId);
+  panel.replaceWith(built.panel);
+  if (built.input) built.input.focus();
+}
+
+// --- the button --------------------------------------------------------------
+
+// Label + ✓ state from the live topics cache. Called on mount, on every retry
+// tick, and from the topicsChanged branch of storage.onChanged (so a filing in
+// ANOTHER tab flips this one too).
+function refreshPlaylistAddButton() {
+  const wrap = playlistAddWrap();
+  if (!wrap) return;
+  const btn = wrap.querySelector(".ytr-pl-add-btn");
+  const label = btn && btn.querySelector(".ytr-pl-add-label");
+  const listId = currentPlaylistKey();
+  if (!btn || !label || !listId) return;
+  const saved = topicsWithPlaylist(listId).length > 0;
+  label.textContent = saved ? "✓ In your Library" : "＋ Add to LearnTube";
+  btn.classList.toggle("is-saved", saved);
+  btn.setAttribute(
+    "aria-label",
+    saved ? "In your LearnTube Library" : "Add this playlist to LearnTube"
+  );
+}
+
+function mountPlaylistAdd() {
+  const row = playlistActionRow();
+  if (!row) return false; // header not hydrated yet -> the retry ticks again
+  const listId = currentPlaylistKey();
+  if (!listId) return false; // no usable id -> nothing to file, don't inject
+  const wrap = document.createElement("span");
+  wrap.id = PLAYLIST_ADD_ID;
+  wrap.className = PLAYLIST_ADD_WRAP_CLASS;
+  // The playlist this mounted wrap belongs to. On a build that REUSES the header
+  // node across an SPA hop (list=A -> list=B), the wrap survives — and an open
+  // panel's handlers still close over A. The tick compares this stamp against
+  // the live route and closes the stale panel before it can file the wrong id.
+  wrap.dataset.ytrList = listId;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "ytr-pl-add-btn";
+  btn.setAttribute("aria-haspopup", "dialog");
+  btn.setAttribute("aria-expanded", "false");
+  const label = document.createElement("span");
+  label.className = "ytr-pl-add-label";
+  label.textContent = "＋ Add to LearnTube";
+  btn.appendChild(label);
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openPlaylistPanel();
+  });
+
+  wrap.appendChild(btn);
+  row.appendChild(wrap);
+  refreshPlaylistAddButton();
+  return true;
+}
+
+// Full teardown: the panel's document listeners first (closePlaylistPanel), then
+// every wrap — including a stray one YouTube may have cloned into a re-rendered
+// header. Safe to call on any route.
+function removePlaylistAdd() {
+  closePlaylistPanel(false);
+  if (playlistToastTimer) {
+    clearTimeout(playlistToastTimer); // no timer left pointing at a dead node
+    playlistToastTimer = null;
+  }
+  document
+    .querySelectorAll("." + PLAYLIST_ADD_WRAP_CLASS)
+    .forEach((n) => n.remove());
+}
+
+// One tick of the per-nav job. Off-route or master-off -> tear down and stop.
+// On-route it keeps ticking for the whole window (cheap: one getElementById)
+// so a header YouTube re-renders mid-hydration gets the button back — the same
+// disappearing-bar problem the Subscriptions header hit in Step 15.
+function playlistAddTick() {
+  if (!isPlaylistPage() || !reworkEnabled) {
+    removePlaylistAdd();
+    return true; // nothing to do on this route
+  }
+  const wrap = playlistAddWrap();
+  // Fast path — but only for a SINGLE, live, correctly-keyed wrap. A second wrap
+  // (a header YouTube cloned) or a wrap keyed to the playlist we just navigated
+  // AWAY from must fall through to the rebuild below, or we'd idle forever on a
+  // duplicate / file the previous list id.
+  const many = document.querySelectorAll("." + PLAYLIST_ADD_WRAP_CLASS).length > 1;
+  if (wrap && document.contains(wrap) && !many) {
+    if (wrap.dataset.ytrList !== currentPlaylistKey()) {
+      // Same header node, new playlist: drop the panel built for the old id
+      // (its click handlers close over it) and re-key the button.
+      closePlaylistPanel(false);
+      wrap.dataset.ytrList = currentPlaylistKey();
+    }
+    refreshPlaylistAddButton();
+    return "idle";
+  }
+  // Idempotent by construction: a wrap without an id (impossible today, but a
+  // clone would qualify) is cleared before we mount the single owned one. The
+  // close() first sheds the panel's document listeners — if YouTube re-rendered
+  // the header out from under an OPEN panel, they'd otherwise outlive it.
+  closePlaylistPanel(false);
+  document
+    .querySelectorAll("." + PLAYLIST_ADD_WRAP_CLASS)
+    .forEach((n) => n.remove());
+  return mountPlaylistAdd() ? false : "idle";
+}
+
+const mountPlaylistAddWithRetry = makeBoundedRetry(playlistAddTick, 300, 10000);
+window.addEventListener("yt-rework:locationchange", mountPlaylistAddWithRetry);
+window.addEventListener("popstate", mountPlaylistAddWithRetry);
+window.addEventListener("yt-navigate-finish", mountPlaylistAddWithRetry);
+
 // --- Inbox read state (dim opened videos) ------------------------------------
 // A video is "read" the moment it is OPENED (locked decision) — detected by
 // reading the /watch route's v= id, not by intercepting clicks. Read state is a
@@ -3923,6 +4400,9 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // Session L: hook YouTube's shared menu popup so its ⋮ dropdown gains our
   // "🚫 Block this channel" row (bounded retry — the container hydrates late).
   wireNativeBlockMenuWithRetry();
+  // Session M: inject "＋ Add to LearnTube" if we hard-loaded straight onto a
+  // /playlist?list=… page (no-op on every other route).
+  mountPlaylistAddWithRetry();
   // …and stamp the surfaces with no decorate pass of their own (watch sidebar,
   // grid shelves) on a hard load.
   reapplyBlockedSweep();
@@ -4065,10 +4545,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
         closeOverflowMenus();
         // …and our row inside YouTube's own ⋮ menu, if one is open right now.
         removeNativeBlockItem();
+        // Session M: …and the playlist header's "＋ Add to LearnTube" button
+        // (+ its panel and dismiss listeners). Master off = plain YouTube.
+        removePlaylistAdd();
       }
       // Master back ON: the popup observer refuses to wire while off, so ask
       // for it again here (idempotent — it no-ops once wired).
       wireNativeBlockMenuWithRetry();
+      // Session M: master back ON re-injects the playlist-header button (the
+      // retry no-ops off /playlist).
+      mountPlaylistAddWithRetry();
       mountLearningHome();
       renderLearningHome();
       decorateSubscriptionsWithRetry();
@@ -4113,6 +4599,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
       // edit, but only matters on a /watch page — route-gate the re-arm so a
       // home/search tab doesn't spin the room retry on every cross-tab edit.
       if (location.pathname === "/watch") roomTickWithRetry();
+      // Session M: a filing here (or in another synced tab) flips the playlist
+      // header's button between "＋ Add to LearnTube" and "✓ In your Library".
+      // Cheap no-op off /playlist (the wrap only exists there). An OPEN panel is
+      // re-rendered too, so a topic deleted/added elsewhere can't be offered by
+      // a stale row (skipped while its new-topic input is showing).
+      refreshPlaylistAddButton();
+      rebuildPlaylistPanel();
       // Save-to-topic menus rebuild from topicsCache on next open — no decorate.
     }
     if (starsChanged) {

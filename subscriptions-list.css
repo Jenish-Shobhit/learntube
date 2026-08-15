@@ -2439,3 +2439,226 @@ html.yt-rework ytd-popup-container .ytr-native-block-label {
   overflow: hidden !important;
   text-overflow: ellipsis !important;
 }
+
+/* =====================================================================
+   17c. "＋ Add to LearnTube" on the playlist page (Session M)
+   ---------------------------------------------------------------------
+   content.js injects ONE button into YouTube's own playlist header, in
+   the row that already holds Play all / Shuffle / ⋮ — on BOTH header
+   generations (ytd-playlist-header-renderer and the newer
+   yt-page-header-view-model builds), so these rules are scoped to the
+   injected classes rather than to a header shape that keeps drifting.
+   Two palettes on purpose, and the split is deliberate:
+     • the BUTTON is ours — a solid --lt-accent pill, the same "one green"
+       as the Library's Resume pill, so it reads as LearnTube's affordance
+       and not as another native YouTube control. --lt-* already flips
+       with html.yt-rework[dark], so both themes come free.
+     • the PANEL sits over native chrome, so like §17b it dresses from
+       YouTube's own --yt-spec-* tokens (with fallbacks, plus a [dark]
+       fallback swap) and reads as a native dropdown in dark and light.
+   Master-gated on html.yt-rework like everything else — with the rework
+   off content.js removes the button outright, so nothing can linger.
+   ===================================================================== */
+html.yt-rework .ytr-pl-add-wrap {
+  position: relative !important; /* the panel + toast anchor to this */
+  display: inline-flex !important;
+  align-items: center !important;
+  margin: 0 0 0 8px !important;
+  vertical-align: middle !important;
+  font-family: var(--lt-font) !important;
+  /* NO z-index here on purpose: `position:relative` alone is enough to anchor
+     the absolutely-positioned panel/toast, while any z-index would open a
+     stacking context that caps their z-index against the rest of the page. */
+}
+html.yt-rework .ytr-pl-add-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  height: 36px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-radius: var(--lt-radius-pill) !important;
+  background: var(--lt-accent) !important;
+  color: var(--lt-on-accent) !important;
+  font-family: var(--lt-font) !important;
+  font-size: var(--lt-fs-sm) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  transition: opacity var(--lt-dur-fast) var(--lt-ease) !important;
+}
+html.yt-rework .ytr-pl-add-btn:hover {
+  opacity: 0.86 !important;
+}
+html.yt-rework .ytr-pl-add-btn:focus-visible {
+  outline: none !important;
+  box-shadow: var(--lt-focus-ring) !important;
+}
+/* Already filed: quieter — an outlined state, never a second call to action. */
+html.yt-rework .ytr-pl-add-btn.is-saved {
+  background: transparent !important;
+  color: var(--lt-accent) !important;
+  box-shadow: inset 0 0 0 1px var(--lt-accent) !important;
+}
+html.yt-rework .ytr-pl-add-btn.is-saved:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--lt-accent), var(--lt-focus-ring) !important;
+}
+
+/* --- the anchored panel (native-chrome palette, like §17b) -------------- */
+html.yt-rework .ytr-pl-panel {
+  position: absolute !important;
+  top: calc(100% + 8px) !important;
+  left: 0 !important;
+  z-index: 2900 !important; /* above the header, below YouTube's own dialogs */
+  box-sizing: border-box !important;
+  min-width: 240px !important;
+  max-width: 320px !important;
+  max-height: 60vh !important;
+  overflow-y: auto !important;
+  padding: 8px !important;
+  border-radius: 12px !important;
+  background: var(--yt-spec-menu-background, #fff) !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16), 0 8px 28px rgba(0, 0, 0, 0.16) !important;
+  color: var(--yt-spec-text-primary, #0f0f0f) !important;
+  font-family: "Roboto", "Arial", sans-serif !important;
+  text-align: left !important;
+}
+html.yt-rework[dark] .ytr-pl-panel {
+  background: var(--yt-spec-menu-background, #282828) !important;
+  color: var(--yt-spec-text-primary, #f1f1f1) !important;
+}
+html.yt-rework .ytr-pl-panel-title {
+  padding: 6px 10px 8px !important;
+  font-size: 1.4rem !important;
+  font-weight: 500 !important;
+  line-height: 2rem !important;
+  color: var(--yt-spec-text-primary, #0f0f0f) !important;
+}
+html.yt-rework[dark] .ytr-pl-panel-title {
+  color: var(--yt-spec-text-primary, #f1f1f1) !important;
+}
+html.yt-rework .ytr-pl-panel-sub {
+  padding: 10px 10px 4px !important;
+  border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.25)) !important;
+  margin-top: 6px !important;
+  font-size: 1.2rem !important;
+  line-height: 1.8rem !important;
+  color: var(--yt-spec-text-secondary, #606060) !important;
+}
+html.yt-rework[dark] .ytr-pl-panel-sub {
+  color: var(--yt-spec-text-secondary, #aaa) !important;
+}
+html.yt-rework .ytr-pl-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  min-height: 36px !important;
+  padding: 0 10px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: 1.4rem !important;
+  font-weight: 400 !important;
+  line-height: 2rem !important;
+  text-align: left !important;
+}
+html.yt-rework .ytr-pl-item {
+  cursor: pointer !important;
+}
+html.yt-rework .ytr-pl-item:hover,
+html.yt-rework .ytr-pl-item:focus-visible {
+  background: var(--yt-spec-additive-background, rgba(128, 128, 128, 0.2)) !important;
+  outline: none !important;
+}
+/* The read-only "it is already in this topic" rows — no hover, no pointer. */
+html.yt-rework .ytr-pl-in {
+  cursor: default !important;
+  color: var(--yt-spec-text-secondary, #606060) !important;
+}
+html.yt-rework[dark] .ytr-pl-in {
+  color: var(--yt-spec-text-secondary, #aaa) !important;
+}
+html.yt-rework .ytr-pl-row-mark {
+  flex: 0 0 auto !important;
+  color: var(--lt-accent) !important;
+  font-weight: 600 !important;
+}
+html.yt-rework .ytr-pl-row-label {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+html.yt-rework .ytr-pl-new-btn {
+  color: var(--yt-spec-text-secondary, #606060) !important;
+}
+html.yt-rework[dark] .ytr-pl-new-btn {
+  color: var(--yt-spec-text-secondary, #aaa) !important;
+}
+
+/* --- the "+ New topic…" input (hidden until revealed) ------------------- */
+html.yt-rework .ytr-pl-new {
+  display: none !important;
+  gap: 6px !important;
+  padding: 6px 10px 2px !important;
+}
+html.yt-rework .ytr-pl-new.is-open {
+  display: flex !important;
+  align-items: center !important;
+}
+html.yt-rework .ytr-pl-input {
+  flex: 1 1 auto !important;
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  height: 32px !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.35)) !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: 1.4rem !important;
+}
+html.yt-rework .ytr-pl-input:focus {
+  outline: none !important;
+  border-color: var(--lt-accent) !important;
+}
+html.yt-rework .ytr-pl-ok {
+  flex: 0 0 auto !important;
+  height: 32px !important;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-radius: var(--lt-radius-pill) !important;
+  background: var(--lt-accent) !important;
+  color: var(--lt-on-accent) !important;
+  font-family: inherit !important;
+  font-size: 1.3rem !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+}
+html.yt-rework .ytr-pl-ok:hover {
+  opacity: 0.86 !important;
+}
+
+/* --- the 2-second "Added ✓" confirmation -------------------------------- */
+html.yt-rework .ytr-pl-toast {
+  position: absolute !important;
+  top: calc(100% + 8px) !important;
+  left: 0 !important;
+  z-index: 2900 !important;
+  padding: 6px 12px !important;
+  border-radius: var(--lt-radius-pill) !important;
+  background: var(--lt-accent) !important;
+  color: var(--lt-on-accent) !important;
+  font-family: var(--lt-font) !important;
+  font-size: var(--lt-fs-xs) !important;
+  font-weight: 600 !important;
+  white-space: nowrap !important;
+  pointer-events: none !important;
+}
