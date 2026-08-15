@@ -3625,8 +3625,10 @@ window.addEventListener("yt-navigate-finish", markCurrentWatchRead);
 // "‹ Back to <topic>" (returns to that topic's Course view on home via the
 // sessionStorage OPEN_COURSE_HINT), an honest "Lecture N of M" position
 // (scrape order — never a fabricated name; omitted when unknown), a Speed pill
-// cycling the live <video>'s playbackRate, and a "Next lecture →" deep-link to
-// the §4 deterministic next in this course. Nothing else: no second lecture
+// cycling the live <video>'s playbackRate, a "Next lecture →" deep-link to
+// the §4 deterministic next in this course, and (Session O) its quiet sibling
+// "← Previous lecture" — the positionally-preceding lecture in the SAME scrape
+// order, so the course can be walked both ways. Nothing else: no second lecture
 // rail, no notes, no Listen/Offline (killed non-goals — the Course page is the
 // structured view; the watch page stays focused on the video). No Data API:
 // watched-state is the Step-6 resume-bar scrape (storage.local.progress).
@@ -3712,6 +3714,38 @@ function courseNextLecture(ctx) {
     }
   }
   return null;
+}
+
+// Session O: the lecture immediately BEFORE the current one, in the very same
+// topic→playlist→video scrape walk that lecturePositionInCourse counts in and
+// courseNextLecture scans (one ordering source for the whole strip — never a
+// second one). Purely POSITIONAL: unlike the §4 deterministic next (first
+// non-watched), "previous" means the row above, watched or not — going back is
+// re-watching by definition, so a watched-skip would make the control useless.
+// The pair is therefore NOT symmetric (Previous-then-Next can jump ahead, not
+// return): §4's contract with the Continue/Resume surfaces wins over symmetry.
+// Crosses playlist boundaries exactly as the position count does. Null on the
+// very first lecture of the course (and when the current video isn't in the
+// scraped lists) — the caller then renders no pill at all, mirroring how Next
+// is simply absent when there is nothing after.
+function coursePreviousLecture(ctx) {
+  const cur = currentWatchVideoId();
+  if (!cur) return null;
+  let prev = null;
+  let found = false;
+  const pls = Array.isArray(ctx.topic.playlists) ? ctx.topic.playlists : [];
+  for (let i = 0; i < pls.length && !found; i++) {
+    const rec = progressCache[pls[i].id];
+    const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
+    for (let j = 0; j < vids.length; j++) {
+      if (vids[j].id === cur) {
+        found = true;
+        break;
+      }
+      prev = { videoId: vids[j].id, listId: pls[i].id };
+    }
+  }
+  return found ? prev : null;
 }
 
 // The current lecture's honest position across the course: 1-based index +
@@ -3816,8 +3850,8 @@ function mountFocusStrip() {
 
 // (Re)build the strip from the current context. B1 (Session G): the strip is
 // now a COLUMN of [row, Up next list] — the row holds Back · position · Speed
-// · Up next ▾ · Next; pressing Up next unfolds a quiet titles-only list of
-// the coming lectures under the row (collapsed by default; state survives
+// · Up next ▾ · Previous · Next; pressing Up next unfolds a quiet titles-only
+// list of the coming lectures under the row (collapsed by default; state survives
 // the re-render ticks via the module let). Wipes + rebuilds children
 // (idempotent contents). Every dynamic string via textContent; every id only
 // ever a link href / dataset value — never innerHTML.
@@ -3851,8 +3885,9 @@ function renderFocusStrip(ctx) {
   row.append(left);
 
   // Right: Speed (the real playbackRate) · Up next ▾ (only when something
-  // titled comes after this video — real titles or nothing) · Next lecture
-  // (a deep-link; simply absent when the course is complete).
+  // titled comes after this video — real titles or nothing) · ← Previous
+  // lecture (Session O: a deep-link; absent on the first lecture) · Next
+  // lecture (a deep-link; simply absent when the course is complete).
   const right = makeEl("div", { className: "ytr-fs-right" });
   const v = roomVideoEl();
   right.append(
@@ -3881,7 +3916,27 @@ function renderFocusStrip(ctx) {
       })
     );
   }
+  // Session O: "← Previous lecture" — the quiet sibling of Next (the plain
+  // .ytr-pill recipe; Next keeps the accent-soft fill so it stays the primary
+  // action), sitting immediately left of it. Same resumeUrl builder, so the
+  // &list= course context rides along and tracking continues. Absent on the
+  // first lecture — the same choice Next makes when there is nothing after (no
+  // disabled ghosts in the strip). NOTE the pair is deliberately asymmetric:
+  // Previous is positional (the row above), Next stays §4-deterministic (first
+  // non-watched — the contract shared with the Library Continue row and the
+  // Course Resume button). When the two would resolve to the SAME video (the
+  // row above is also the first unwatched), Previous is suppressed — two pills
+  // pointing at one destination reads as a bug.
   const next = courseNextLecture(ctx);
+  const prev = coursePreviousLecture(ctx);
+  if (prev && !(next && next.videoId === prev.videoId)) {
+    const prevLink = makeEl("a", {
+      className: "ytr-pill",
+      text: "← Previous lecture",
+    });
+    prevLink.href = resumeUrl(prev); // a URL only — never innerHTML
+    right.append(prevLink);
+  }
   if (next) {
     const go = makeEl("a", {
       className: "ytr-pill ytr-pill-next",

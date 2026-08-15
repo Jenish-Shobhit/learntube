@@ -2002,6 +2002,10 @@ html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-row {
   justify-content: space-between !important;
   gap: var(--lt-space-4) !important;
   min-width: 0 !important;
+  /* Session O grew the right cluster by a pill (~150px); only .ytr-fs-back can
+     ellipsize, so let the row fold to two lines at narrow widths instead of
+     overflowing the player column. */
+  flex-wrap: wrap !important;
 }
 html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-left {
   display: flex !important;
@@ -2036,7 +2040,10 @@ html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-fs-right {
   gap: var(--lt-space-2) !important;
   flex-shrink: 0 !important;
 }
-/* The pills — Speed (a real <button>) and Next lecture (a real link). */
+/* The pills — Speed (a real <button>), Up next, and the two lecture links.
+   This base recipe IS the quiet one: Session O's "← Previous lecture" wears it
+   unchanged (same geometry, outlined surface) so only "Next lecture →" carries
+   the accent fill below and stays the primary action. */
 html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-pill {
   appearance: none !important;
   -webkit-appearance: none !important;
