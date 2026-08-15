@@ -40,11 +40,14 @@ switch, with a per-surface switch for any piece you want handed back.
   request, exactly what the algorithm would have shown you — underneath your
   topics, in a calm two-line List or a Grid view (your choice is remembered).
   It's display-only; peeking never feeds the algorithm.
-- **Block a channel for good.** Choose **⊘ Block channel** from the ··· menu on
-  any search result or Peek row, and that creator's videos leave everywhere
-  recommendations render — search, both Peek views, and the native home feed.
-  Blocks sync across your devices; unblock from the popup's Blocked list.
-  (Subscriptions stays untouched — you chose those.)
+- **Block a channel for good.** Open a video's ordinary **⋮** menu — YouTube's
+  own, on a search result, a home or Peek card, or the watch page's sidebar —
+  and pick **🚫 Block this channel**. That creator's videos then leave
+  everywhere recommendations render: search, both Peek views, the native home
+  feed, the watch-page sidebar and grid shelves. Blocks sync across your
+  devices; unblock from the popup's Blocked list. (Subscriptions stays
+  untouched — you chose those — and playlists are never touched, so blocking
+  can't hide your own course.)
 - **Fewer distractions everywhere.** Watch-page "up next" suggestions, comments,
   and end-screen cards are removed — on a lecture inside one of your topics, an
   **Up next ▾** pill brings back just the coming lectures' titles, on demand —

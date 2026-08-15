@@ -2097,8 +2097,10 @@ window.addEventListener("yt-navigate-finish", decorateSubscriptionsWithRetry);
 // the lens is ON) hides sub-threshold clips. This JS does only what CSS can't:
 // (1) parse each result's on-page duration into a data-ytr-short-clip flag the
 // lens CSS keys on, (2) stamp the "Shorts" filter chip so CSS can hide it,
-// (3) inject the lens toggle + the per-row overflow control, (4) run the
-// capture-phase delegated click. No Data API — duration comes from the overlay
+// (3) inject the lens toggle, (4) run the capture-phase delegated click for it,
+// (5) stamp data-ytr-blocked on results from blocked channels. (Session L: the
+// per-row "···" overflow control this used to inject is gone — search rows keep
+// YouTube's own ⋮.) No Data API — duration comes from the overlay
 // text. All master-gated; no-op off /results.
 const SHORT_CLIP_MAX_SECONDS = 180; // hide clips under 3 min when the lens is on
 const SEARCH_FLAG = "data-ytr-search"; // one-shot per-row idempotency flag
@@ -2110,11 +2112,13 @@ function searchRoot() {
 // --- K3: re-decorate rows YouTube appends on scroll --------------------------
 // The decorators (decorateSearch / decorateHome) run only on nav-bounded
 // retries that settle ~1s after results stabilize, so rows YouTube appends as
-// you scroll (search continuations, the home rich-grid) never receive our ···
-// overflow. Without a chip AND with §14f/§16·11 hiding the native ⋮, those rows
-// have NO menu (the K3 bug). A debounced MutationObserver on the surface's
+// you scroll (search continuations, the home rich-grid) would never be
+// decorated. Session L: the ··· chip those rows used to be missing is gone, but
+// the observer still earns its keep — a continuation row from a BLOCKED channel
+// must get its data-ytr-blocked stamp (and a search row its lens flag) or it
+// renders in full. A debounced MutationObserver on the surface's
 // stable root re-runs the (idempotent) sync decorator whenever the subtree
-// changes. Guard against our own chip inserts re-triggering it by disconnecting
+// changes. Guard against our own stamps re-triggering it by disconnecting
 // for the duration of the decorate pass. shouldObserve() re-checks the surface
 // is still active before re-attaching, so master-off / leaving the surface stop
 // it cleanly. The decorate fn is the plain sync decorator (never the retry).
@@ -2256,12 +2260,6 @@ function removeSearchToolbar() {
   // K3: leaving search / master-off tears down the search chrome — stop the
   // re-decoration observer here too (the twin of the ··· purge below).
   searchDecorateObserver.disconnect();
-  // Also shed the per-row ··· overflow controls (video + channel results). Their
-  // CSS is gated on html.yt-rework, so on master-off an orphan would render as a
-  // raw default button — this is the search twin of purgeHomeOverflow. No-op off
-  // search (searchRoot() null once ytd-search is gone).
-  const sr = searchRoot();
-  if (sr) sr.querySelectorAll(".ytr-ovf").forEach((n) => n.remove());
 }
 
 // Stamp the "Shorts" filter chip so CSS section 14a can hide it. CSS can't
@@ -2318,7 +2316,7 @@ function decorateSearch() {
         pending = true; // overlay not hydrated (or live/upcoming) -> re-read
       }
     }
-    // Video id (best-effort) + overflow control — injected once.
+    // Video id (best-effort) — stamped once.
     if (!row.getAttribute("data-ytr-vid")) {
       const vid = searchRowVideoId(row);
       if (vid) {
@@ -2328,35 +2326,19 @@ function decorateSearch() {
         pending = true;
       }
     }
-    const meta =
-      row.querySelector("#metadata-line") ||
-      row.querySelector("#meta") ||
-      row.querySelector("#details");
-    if (!meta) {
-      pending = true; // metadata line hydrates late -> overflow still to inject
-    } else if (!meta.querySelector(".ytr-ovf")) {
-      meta.appendChild(buildOverflowControl());
-      changed = true;
-    }
   });
 
-  // Session H: channel RESULTS (ytd-channel-renderer) — the most natural place
-  // to block a channel (there's no video to save, so the ··· is Block-only).
-  // The block stamp also hides the channel result itself once its channel is
-  // blocked, so "that channel's rows vanish from search" includes this row.
+  // Session H: channel RESULTS (ytd-channel-renderer) carry the same block stamp
+  // — once its channel is blocked, the channel result itself leaves search too,
+  // so "that channel's rows vanish from search" includes this row.
+  // (Session L: no ··· chip is injected here any more — Block now rides
+  // YouTube's OWN ⋮ menu; see "Block from the native ⋮ menu" below.)
   const channelRows = root.querySelectorAll("ytd-channel-renderer");
   channelRows.forEach((row) => {
     const ck = searchRowChannelKey(row); // same normalizeChannelKey chain
     const shouldBlock = !!(ck && blockedCache[ck]);
     if (shouldBlock !== row.hasAttribute("data-ytr-blocked")) {
       row.toggleAttribute("data-ytr-blocked", shouldBlock);
-      changed = true;
-    }
-    const mount = searchChannelOverflowMount(row);
-    if (!mount) {
-      pending = true; // info block hydrates late -> overflow still to inject
-    } else if (!mount.querySelector(".ytr-ovf")) {
-      mount.appendChild(buildOverflowControl());
       changed = true;
     }
   });
@@ -2375,8 +2357,10 @@ function decorateSearch() {
   return !changed && !pending;
 }
 
-// Capture-phase delegated click for our injected search controls. Each branch
-// handles its control and returns; native result clicks pass straight through.
+// Capture-phase delegated click for our injected search controls. Session L
+// removed the per-row ··· chip (Block moved into YouTube's own ⋮ menu), so the
+// only injected control left on search is the Lectures lens toggle. Native
+// result clicks pass straight through.
 function onSearchClick(e) {
   const t = e.target;
   if (!t || !t.closest) return;
@@ -2388,53 +2372,6 @@ function onSearchClick(e) {
     setLensFilter(!lensFilterOn);
     return;
   }
-
-  // 2. Overflow button -> toggle its menu. Video results get Save-to-topic +
-  // Block; a channel RESULT is Block-only (no video to save).
-  const ovfBtn = t.closest("[data-ovf-btn]");
-  if (ovfBtn) {
-    e.preventDefault();
-    e.stopPropagation();
-    const wrap = ovfBtn.closest(".ytr-ovf");
-    const wasOpen = wrap.classList.contains("is-open");
-    closeOverflowMenus();
-    if (!wasOpen) {
-      const isChannel = !!ovfBtn.closest("ytd-channel-renderer");
-      wrap.appendChild(
-        buildOverflowMenu({ archive: false, block: true, save: !isChannel })
-      );
-      wrap.classList.add("is-open");
-    }
-    return;
-  }
-
-  // 3. Save-to-topic menu item -> save this result's video id (one click).
-  const saveItem = t.closest("[data-ovf-save]");
-  if (saveItem) {
-    e.preventDefault();
-    e.stopPropagation();
-    const row = saveItem.closest("ytd-video-renderer");
-    const vid = row && searchRowVideoId(row);
-    addVideoToTopic(saveItem.dataset.ovfSave, vid);
-    closeOverflowMenus();
-    return;
-  }
-
-  // 4. Block channel -> add this result's channel key to the synced blocklist.
-  // Resolves both a video result and a channel result row.
-  const blockItem = t.closest("[data-ovf-block]");
-  if (blockItem) {
-    e.preventDefault();
-    e.stopPropagation();
-    const row = blockItem.closest("ytd-video-renderer, ytd-channel-renderer");
-    const ck = row && searchRowChannelKey(row);
-    blockCreator(ck);
-    closeOverflowMenus();
-    return;
-  }
-
-  // 5. Click elsewhere with a menu open -> close it (let native nav proceed).
-  if (document.querySelector(".ytr-ovf.is-open")) closeOverflowMenus();
 }
 
 // Search hydrates late and lazy-loads more results on scroll: bounded retry on
@@ -2445,7 +2382,6 @@ const decorateSearchWithRetry = makeBoundedRetry(
       if (document.getElementById(SEARCH_TOOLBAR_ID) || lensFilterOn) {
         removeSearchToolbar();
         setLensFilter(false);
-        closeOverflowMenus();
       }
       searchDecorateObserver.disconnect(); // K3: off search -> stop watching
       return true;
@@ -2480,23 +2416,11 @@ window.addEventListener("yt-navigate-finish", decorateSearchWithRetry);
 function setPeek(on) {
   peekOn = !!on && reworkEnabled;
   document.documentElement.toggleAttribute("data-ytr-peek", peekOn);
-  // Turning Peek off: purge the ··· overflow controls decorateHome injected onto
-  // the home rows in List view. Their CSS (§16·13) is scoped to
-  // [data-ytr-peek-view="list"], so once the reveal closes a leftover control
-  // would render as a raw, browser-default (and still-clickable) button over the
-  // native cards. This centralizes cleanup for every peek-off path (pill,
-  // openCourse, master-off, S6-off, removeLearningHome, nav-away).
-  if (!peekOn) purgeHomeOverflow();
+  // (Session L: nothing to purge on peek-off any more — the ··· overflow chip
+  // the home rows used to carry is gone; Block rides YouTube's own ⋮ menu, so
+  // Peek adds no injected per-row control at all.)
   const pill = document.getElementById("ytr-peek-pill");
   if (pill) pill.setAttribute("aria-pressed", peekOn ? "true" : "false");
-}
-
-// Remove the injected ··· overflow controls from the home rows. Called whenever
-// we leave Peek List mode (view -> grid, Peek off, S6 off) so no unstyled
-// control is stranded on a native grid card.
-function purgeHomeOverflow() {
-  const hb = homeBrowse();
-  if (hb) hb.querySelectorAll(".ytr-ovf").forEach((n) => n.remove());
 }
 
 // Persist the remembered Peek view (read-modify-write settings.peekView, never
@@ -2517,8 +2441,8 @@ function setPeekView(view) {
   peekView = view === "list" ? "list" : "grid";
   document.documentElement.setAttribute("data-ytr-peek-view", peekView);
   mutatePeekView(peekView); // remembered for next time (onChanged re-fills mirrors)
-  // Switching TO list needs the rows decorated (ovf injection happens in list
-  // mode only); switching to grid leaves the native cards untouched.
+  // Switching view re-runs the decorate pass (List needs the read-dimming stamps;
+  // Grid leaves the native cards untouched).
   if (peekOn) decorateHomeWithRetry();
 }
 
@@ -2528,22 +2452,19 @@ function setPeekView(view) {
 //  (1) Block (B2): stamp data-ytr-blocked on every row whose channel is blocked
 //      — so blocked creators leave the feed everywhere it renders (native + both
 //      Peek views). Runs in BOTH modes.
-//  (2) Peek List: stamp the row's video id (read-dimming) + inject the ··· menu
-//      (Save to topic / Block) — only in the list view (grid stays native).
-// Reuses the Subscriptions helpers (subsRowVideoId / subsRowChannelKey /
-// subsRowByline / buildOverflowControl) — Home and Subscriptions are the same
-// row elements. Display-only; never reorders. Returns true when settled.
+//  (2) Peek List: stamp the row's video id so opened rows dim like read mail —
+//      only in the list view (grid stays native).
+// Reuses the Subscriptions helpers (subsRowVideoId / subsRowChannelKey) — Home
+// and Subscriptions are the same row elements. Session L: no ··· chip is
+// injected here any more (Block rides YouTube's own ⋮ menu), so the native
+// per-row menu is left exactly as YouTube shipped it.
+// Display-only; never reorders. Returns true when settled.
 function decorateHome() {
   if (!reworkEnabled) return true; // master off -> plain YouTube (settled)
   const browse = homeBrowse();
   if (!browse) return true; // off-page; the retry handles teardown
   const nativeFeed = togglesCache.replaceHome === false;
   const listView = peekOn && peekView === "list";
-  // Session H: the ··· overflow now rides BOTH Peek views (Grid carries it too),
-  // so it is shed only when we are NOT peeking — the S6-off native feed (which
-  // never gets Block entry points), or any leftover after Peek closes. Runs
-  // before the early return so a native-feed re-decorate always cleans up.
-  if (!peekOn) purgeHomeOverflow();
   if (!peekOn && !nativeFeed) return true; // Library shown, feed hidden -> nothing
 
   let changed = false;
@@ -2570,10 +2491,9 @@ function decorateHome() {
       row.toggleAttribute("data-ytr-blocked", shouldBlock);
       changed = true;
     }
-    // (2) Peek extras — injected in BOTH views while peeking (Session H: Grid
-    // carries the ··· too). The video id is stamped in both (Save-to-topic needs
-    // it); read-dimming stays List-only so Grid thumbnails/layout stay native
-    // (the §16·12 dim rule is List-scoped anyway).
+    // (2) Peek extras — the video id is stamped in BOTH views; read-dimming
+    // stays List-only so Grid thumbnails/layout stay native (the §16·12 dim rule
+    // is List-scoped anyway).
     if (peekOn) {
       if (!row.getAttribute("data-ytr-vid")) {
         const vid = subsRowVideoId(row, null);
@@ -2583,21 +2503,9 @@ function decorateHome() {
         }
       }
       if (listView) applyReadState(row, row.getAttribute("data-ytr-vid"));
-      const byline = subsRowByline(row);
-      if (!byline) {
-        pending = true; // byline hydrates late -> overflow still to inject
-      } else if (!byline.querySelector(".ytr-ovf")) {
-        byline.appendChild(buildOverflowControl());
-        changed = true;
-      }
     }
   });
 
-  // Delegated capture-phase click for the Peek list ··· menus, wired once.
-  if (peekOn && !browse.dataset.ytrPeekWired) {
-    browse.addEventListener("click", onPeekClick, true);
-    browse.dataset.ytrPeekWired = "1";
-  }
   return !changed && !pending;
 }
 
@@ -2624,57 +2532,6 @@ const decorateHomeWithRetry = makeBoundedRetry(
 window.addEventListener("yt-rework:locationchange", decorateHomeWithRetry);
 window.addEventListener("popstate", decorateHomeWithRetry);
 window.addEventListener("yt-navigate-finish", decorateHomeWithRetry);
-
-// Capture-phase delegated click for the Peek list ··· controls. Mirrors
-// onSearchClick: the menu has Save-to-topic + Block channel (no Archive — that's
-// an inbox tool). Each branch preventDefault + stopPropagation so a control never
-// opens the video; native row clicks pass through.
-function onPeekClick(e) {
-  const t = e.target;
-  if (!t || !t.closest) return;
-
-  // 1. Overflow button -> toggle its menu (Save to topic + Block, no Archive).
-  const ovfBtn = t.closest("[data-ovf-btn]");
-  if (ovfBtn) {
-    e.preventDefault();
-    e.stopPropagation();
-    const wrap = ovfBtn.closest(".ytr-ovf");
-    const wasOpen = wrap.classList.contains("is-open");
-    closeOverflowMenus();
-    if (!wasOpen) {
-      wrap.appendChild(buildOverflowMenu({ archive: false, block: true }));
-      wrap.classList.add("is-open");
-    }
-    return;
-  }
-
-  // 2. Save-to-topic -> save this row's video id.
-  const saveItem = t.closest("[data-ovf-save]");
-  if (saveItem) {
-    e.preventDefault();
-    e.stopPropagation();
-    const row = saveItem.closest("[data-ytr-vid]");
-    const vid = row && row.getAttribute("data-ytr-vid");
-    addVideoToTopic(saveItem.dataset.ovfSave, vid);
-    closeOverflowMenus();
-    return;
-  }
-
-  // 3. Block channel -> add this row's channel key to the synced blocklist.
-  const blockItem = t.closest("[data-ovf-block]");
-  if (blockItem) {
-    e.preventDefault();
-    e.stopPropagation();
-    const row = blockItem.closest("[data-ytr-chan]");
-    const ck = row && row.getAttribute("data-ytr-chan");
-    blockCreator(ck);
-    closeOverflowMenus();
-    return;
-  }
-
-  // 4. Click elsewhere with a menu open -> close it (let native nav proceed).
-  if (document.querySelector(".ytr-ovf.is-open")) closeOverflowMenus();
-}
 
 // --- Phase 3: Block — silence a channel everywhere recommendations render -----
 // The blocklist is synced (small, bounded, user-authored — wanted on every
@@ -2725,22 +2582,6 @@ function searchRowChannelKey(row) {
   return subsRowChannelKey(row);
 }
 
-// The mount point for the Block-only ··· on a channel result. Prefer
-// #info-section — it WRAPS the channel's #main-link anchor, so our <button>
-// lands OUTSIDE the <a> (never a button nested in a link). CSS then pins the
-// control to the row's top-right. Fallbacks across builds; fail-quiet: null ->
-// not yet hydrated (the retry re-injects), so a drifted id leaves the row
-// clickable.
-function searchChannelOverflowMount(row) {
-  return (
-    row.querySelector("#info-section") ||
-    row.querySelector("#info") ||
-    row.querySelector("#text-container") ||
-    row.querySelector("#metadata") ||
-    null
-  );
-}
-
 // Re-stamp data-ytr-blocked wherever recommendations render (search results +
 // home rows) from the live blockedCache. Called after a block/unblock and from
 // the blockedChanged onChanged diff — CSS hides the stamped rows.
@@ -2765,6 +2606,25 @@ function restampBlocked() {
       row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
     });
   }
+  // Session L: Block is now offered from YouTube's OWN ⋮, which also rides the
+  // watch-page related sidebar (ytd-compact-video-renderer) and the grid shelves
+  // (ytd-grid-video-renderer). "Offered" has to mean "takes visible effect", so
+  // stamp those too — document-wide, because they render outside ytd-search and
+  // outside the home browse. Display-only (§17 hides), never reorders.
+  // ytd-playlist-video-renderer is deliberately NOT here: a playlist is often
+  // the user's own course, and blocking must never hide their own lectures.
+  // Skip rows inside Subscriptions (you chose those — §17's promise) and inside
+  // a channel's own page (navigating there is deliberate; emptying it helps
+  // nobody) — current builds render neither surface with these tags, but the
+  // stamp must not depend on that staying true.
+  document
+    .querySelectorAll("ytd-compact-video-renderer, ytd-grid-video-renderer")
+    .forEach((row) => {
+      if (row.closest('ytd-browse[page-subtype="subscriptions"], ytd-browse[page-subtype="channels"]'))
+        return;
+      const ck = row.getAttribute("data-ytr-chan") || subsRowChannelKey(row);
+      row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
+    });
 }
 
 // Re-stamp NOW and again on a fixed cadence for ~3s. A single-channel search
@@ -2787,6 +2647,335 @@ function reapplyBlockedSweep() {
     }
   }, 400);
 }
+
+// Session L: the watch sidebar / grid shelves have no decorate pass of their own
+// (they carry no LearnTube chrome — only the block stamp), so run the sweep on
+// every navigation. Its ~4.8s cadence also covers those rows hydrating late.
+window.addEventListener("yt-rework:locationchange", reapplyBlockedSweep);
+window.addEventListener("yt-navigate-finish", reapplyBlockedSweep);
+
+// --- Session L: Block from YouTube's OWN ⋮ menu -------------------------------
+// v1.1 hid YouTube's native per-row 3-dot menu on search (§14f) and Peek
+// (§16·11) and floated our own "···" chip in its place. On the native cards that
+// chip read as a stray dark pill, and it cost people the menu they already knew.
+// Session L reverses the trade: the native ⋮ is BACK everywhere it was hidden
+// (both CSS gates are gone, along with the chip on those surfaces) and Block is
+// injected as ONE extra row INSIDE YouTube's own dropdown — separator, then
+// "🚫 Block this channel", styled from YouTube's own --yt-spec-* tokens so it
+// reads as a native row in dark and light.
+//
+// Three small parts, each fail-quiet — the native menu must NEVER break because
+// of us, so every step feature-detects and does nothing when the DOM has drifted:
+//   (1) rememberMenuTrigger — a capture-phase document click listener that
+//       remembers the last VIDEO ROW whose *button* was clicked. A ⋮ trigger is
+//       a <button> / yt-icon-button / button-view-model and is never inside an
+//       <a href>, so "a button click inside a row, not on a link" is a
+//       drift-proof stand-in for "this row's menu is about to open". EVERY click
+//       either sets the record or clears it, so a masthead / avatar / sidebar
+//       menu opened next can never inherit a stale row.
+//   (2) A debounced MutationObserver on ytd-popup-container (YouTube renders the
+//       ONE shared menu popup there and re-uses it for every row) that notices
+//       the dropdown open / re-render and runs the injection.
+//   (3) injectNativeBlockItem — idempotent: it re-uses an already-injected row
+//       (just re-pointing it at the new channel) instead of stacking duplicates
+//       when the shared popup re-opens.
+// Clicking the row calls blockCreator() — the SAME synced settings.blockedCreators
+// path the v1.1 chip used, so the popup's Blocked list and its ✕ unblock are
+// untouched.
+
+const NATIVE_BLOCK_ITEM_CLASS = "ytr-native-block";
+const NATIVE_BLOCK_SEP_CLASS = "ytr-native-block-sep";
+
+// Every element YouTube uses as a "video row" across the surfaces that ship a
+// per-row ⋮ (search results, home/subscriptions lockups + rich items, watch-page
+// related, grids, playlists, channel results). closest() picks the innermost, so
+// a lockup nested in a rich item resolves to the lockup — both carry the same
+// channel link, so either resolves the same key.
+const BLOCK_ROW_SELECTOR = [
+  "ytd-video-renderer",
+  "ytd-rich-item-renderer",
+  "yt-lockup-view-model",
+  "ytd-compact-video-renderer",
+  "ytd-grid-video-renderer",
+  "ytd-channel-renderer",
+].join(",");
+// DELIBERATELY ABSENT: ytd-playlist-video-renderer. A playlist is very often the
+// user's OWN course (the Library is built from playlists), so offering "block
+// this channel" on a lecture row invites hiding your own material. No Block row
+// inside playlist rows, and §17 never stamps/hides them either.
+
+// Anything YouTube renders a ⋮ trigger as, across builds.
+const BLOCK_TRIGGER_SELECTOR =
+  'button, yt-icon-button, button-view-model, ytd-menu-renderer, tp-yt-paper-icon-button, [role="button"]';
+
+// …except the Subscribe / bell button on a channel result, which opens the
+// NOTIFICATION-PREFERENCES menu (All / Personalized / None / Unsubscribe) out of
+// the same shared popup. That is not the designed placement, so a click on it
+// counts as "not a ⋮ trigger" and clears the record.
+const BLOCK_TRIGGER_EXCLUDE_SELECTOR =
+  "ytd-subscribe-button-renderer, yt-subscribe-button-view-model, subscribe-button-view-model, #subscribe-button, ytd-subscription-notification-toggle-button-renderer, ytd-subscription-notification-toggle-button-renderer-next";
+
+// The row whose ⋮ was clicked last, and when. The age window keeps a record from
+// outliving its menu; document.contains() keeps it from outliving its DOM node.
+let lastMenuRow = null;
+let lastMenuAt = 0;
+const MENU_TRIGGER_MAX_AGE_MS = 4000;
+
+function rememberMenuTrigger(e) {
+  const t = e.target;
+  if (!t || !t.closest) return;
+  // Our OWN injected row lives in the popup, not in a video row — leaving early
+  // matters: this listener is capture-phase, so the removeNativeBlockItem below
+  // would delete the item before its own (bubble-phase) handler ever ran.
+  if (t.closest("." + NATIVE_BLOCK_ITEM_CLASS)) return;
+  // Belt (1) against a wrong-channel window: the shared popup keeps showing the
+  // PREVIOUS row's menu (with our row still pointing at the previous channel)
+  // until the debounced re-inject catches up. Strip it synchronously on every
+  // click, so the worst case is a menu with no Block row for ~30ms — never a
+  // Block row aimed at the wrong channel.
+  removeNativeBlockItem();
+  const row = t.closest(BLOCK_ROW_SELECTOR);
+  const isTrigger =
+    !!row &&
+    !t.closest("a[href]") &&
+    !t.closest(BLOCK_TRIGGER_EXCLUDE_SELECTOR) &&
+    !!t.closest(BLOCK_TRIGGER_SELECTOR);
+  // Set OR clear on every click: a click that isn't a row's menu trigger must
+  // invalidate the previous one, or the next popup (avatar, masthead, a chip's
+  // menu) would resolve to a channel it has nothing to do with.
+  lastMenuRow = isTrigger ? row : null;
+  lastMenuAt = isTrigger ? Date.now() : 0;
+}
+document.addEventListener("click", rememberMenuTrigger, true);
+
+function popupContainer() {
+  return document.querySelector("ytd-popup-container");
+}
+
+// Is this dropdown actually open? Prefer Polymer's own `opened` property — the
+// authority, and it never reads true for a dropdown that is closing or was never
+// opened. Only where the property is missing (a build that drifted) do we fall
+// back to sniffing the attributes/style YouTube happens to set.
+function isDropdownOpen(d) {
+  if (typeof d.opened === "boolean") return d.opened;
+  if (d.getAttribute("aria-hidden") === "true") return false;
+  if (d.style && d.style.display === "none") return false;
+  return true;
+}
+
+// The currently OPEN shared menu popup as { drop, list }, or null. Requires an
+// ytd-menu-popup-renderer specifically, so a dialog (Save to playlist, Share) or
+// a non-menu overlay never matches; and skips the subscription notification
+// preferences menu, which rides the same popup but isn't a row's ⋮.
+function openNativeMenu() {
+  const pc = popupContainer();
+  if (!pc) return null;
+  const drops = pc.querySelectorAll("tp-yt-iron-dropdown");
+  for (let i = 0; i < drops.length; i++) {
+    const d = drops[i];
+    if (!isDropdownOpen(d)) continue;
+    const menu = d.querySelector("ytd-menu-popup-renderer");
+    if (!menu) continue;
+    if (
+      menu.querySelector(
+        "ytd-notification-preference-toggle-renderer, ytd-subscription-notification-toggle-button-renderer"
+      )
+    )
+      continue; // the bell / Subscribed menu — not a video row's ⋮
+    const list =
+      menu.querySelector("#items") || menu.querySelector("tp-yt-paper-listbox");
+    if (list) return { drop: d, list: list };
+  }
+  return null;
+}
+
+// The dropdown our row currently lives in (null when we have no row injected).
+// Identity, not a timer, is what keeps a live row alive: see injectNativeBlockItem.
+let nativeBlockDrop = null;
+
+// Drop our row (and its separator) from wherever it currently sits.
+function removeNativeBlockItem() {
+  document
+    .querySelectorAll("." + NATIVE_BLOCK_ITEM_CLASS + ", ." + NATIVE_BLOCK_SEP_CLASS)
+    .forEach((n) => n.remove());
+  nativeBlockDrop = null;
+}
+
+// Close the shared dropdown the way Polymer does. If this build doesn't expose
+// close() on an OPEN dropdown, fall back ONCE to an Escape keydown (YouTube's
+// overlay manager listens for it) rather than leaving the menu hanging open.
+function closeNativeMenu() {
+  const pc = popupContainer();
+  if (!pc) return;
+  let closed = false;
+  pc.querySelectorAll("tp-yt-iron-dropdown").forEach((d) => {
+    // Only an OPEN dropdown counts: closing an already-closed one used to set
+    // the latch and made the Escape belt unreachable on a build without close().
+    if (!isDropdownOpen(d)) return;
+    if (typeof d.close === "function") {
+      try {
+        d.close();
+        closed = true;
+      } catch (_) {
+        // a build that throws here just falls through to the Escape belt
+      }
+    }
+  });
+  if (!closed) {
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+    );
+  }
+}
+
+function onNativeBlockActivate(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const item = e.currentTarget;
+  const ck = item && item.dataset ? item.dataset.ytrChan : null;
+  // Belt (2) against a wrong-channel window: re-resolve the remembered row NOW
+  // and refuse to act unless it still yields the exact key this row was built
+  // for. Blocking is destructive-ish (the creator disappears from every feed),
+  // so a stale or drifted pointer must fail closed, not block the wrong channel.
+  const live = lastMenuRow && document.contains(lastMenuRow)
+    ? subsRowChannelKey(lastMenuRow)
+    : null;
+  if (!ck || live !== ck) {
+    closeNativeMenu();
+    removeNativeBlockItem();
+    return;
+  }
+  // The EXISTING store: settings.blockedCreators via blockCreator (which also
+  // updates blockedCache and runs the re-stamp sweep that hides the rows).
+  blockCreator(ck);
+  closeNativeMenu();
+  removeNativeBlockItem();
+}
+
+function buildNativeBlockItem(ck) {
+  const sep = document.createElement("div");
+  sep.className = NATIVE_BLOCK_SEP_CLASS;
+  const item = document.createElement("div");
+  item.className = NATIVE_BLOCK_ITEM_CLASS;
+  item.setAttribute("role", "menuitem");
+  item.setAttribute("tabindex", "0");
+  item.dataset.ytrChan = ck; // channel key rides as data, never as markup
+  const label = document.createElement("span");
+  label.className = "ytr-native-block-label";
+  label.textContent = "🚫 Block this channel"; // no innerHTML anywhere
+  item.appendChild(label);
+  item.addEventListener("click", onNativeBlockActivate);
+  item.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") onNativeBlockActivate(ev);
+  });
+  return { sep: sep, item: item };
+}
+
+// Append our row to the open native menu. Silent no-op whenever anything is
+// missing: no open menu, an unrecognised menu shape, no resolvable channel, or
+// the channel is already blocked.
+//
+// The observer re-runs this on EVERY popup-container mutation — the dropdown
+// rewrites its inline style on scroll/resize, a toast lands, YouTube re-renders.
+// So freshness gates only NEW injections: once our row is in a dropdown that is
+// still open (nativeBlockDrop identity), it stays, even past the 4s window, or a
+// menu the user is still reading would silently lose the row mid-hover. The row
+// is instead evicted by rememberMenuTrigger the moment the user clicks anything
+// else — which is also what re-points it at a different row.
+function injectNativeBlockItem() {
+  const open = openNativeMenu();
+  if (!open) return;
+  const list = open.list;
+  const existing = list.querySelector("." + NATIVE_BLOCK_ITEM_CLASS);
+  const dropOurs = () => {
+    if (existing) existing.remove();
+    const sep = list.querySelector("." + NATIVE_BLOCK_SEP_CLASS);
+    if (sep) sep.remove();
+    nativeBlockDrop = null;
+  };
+  if (!reworkEnabled) return dropOurs(); // master off -> plain YouTube
+  // Our row is already live in THIS still-open dropdown -> leave it alone.
+  if (existing && nativeBlockDrop === open.drop) {
+    // Keep it last in case YouTube appended items of its own after ours.
+    if (existing.nextElementSibling) {
+      const sep = list.querySelector("." + NATIVE_BLOCK_SEP_CLASS);
+      if (sep) list.appendChild(sep);
+      list.appendChild(existing);
+    }
+    return;
+  }
+  // Feature-detect the menu shape: a real YouTube menu ships item renderers. If
+  // none is present the build has drifted (or this is some other popup) — leave
+  // it completely alone.
+  if (
+    !list.querySelector(
+      "ytd-menu-service-item-renderer, ytd-menu-navigation-item-renderer, yt-list-item-view-model"
+    )
+  )
+    return dropOurs();
+
+  const row = lastMenuRow;
+  const fresh =
+    !!row &&
+    document.contains(row) &&
+    Date.now() - lastMenuAt < MENU_TRIGGER_MAX_AGE_MS;
+  const ck = fresh ? subsRowChannelKey(row) : null;
+  // No channel resolvable (menu opened from a non-video context, or the row's
+  // channel link hasn't hydrated) -> don't inject. Already blocked -> nothing to
+  // offer (the popup's Blocked list owns the unblock).
+  if (!ck || blockedCache[ck]) return dropOurs();
+
+  dropOurs(); // a stale row from a previous dropdown, if any
+  const built = buildNativeBlockItem(ck);
+  list.appendChild(built.sep);
+  list.appendChild(built.item);
+  nativeBlockDrop = open.drop;
+}
+
+// Watch the shared popup container for the menu opening / re-rendering. Debounced
+// (a single open bursts many mutations) and self-healing: our own appendChild
+// re-triggers it, but the next pass finds `existing` and returns, so it settles
+// in one extra tick — no loop.
+let nativeMenuObserver = null;
+let nativeMenuTimer = null;
+
+function wireNativeBlockMenu() {
+  if (nativeMenuObserver) return true; // already wired for this document
+  // Master off -> plain YouTube, so don't even watch the popup. The
+  // masterChanged branch re-triggers this retry when the switch comes back on.
+  if (!reworkEnabled) return true;
+  const pc = popupContainer();
+  if (!pc) return false; // ytd-popup-container not hydrated yet -> retry
+  nativeMenuObserver = new MutationObserver(() => {
+    if (nativeMenuTimer) return;
+    nativeMenuTimer = setTimeout(() => {
+      nativeMenuTimer = null;
+      try {
+        injectNativeBlockItem();
+      } catch (_) {
+        // never let our injection surface as a broken native menu
+      }
+    }, 30);
+  });
+  nativeMenuObserver.observe(pc, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["aria-hidden", "style"],
+  });
+  return true;
+}
+
+// ytd-popup-container is an app-level singleton that hydrates a beat after the
+// content script runs, so hunt for it on a bounded retry (and again on nav, in
+// case a hard reload replaced the app root).
+const wireNativeBlockMenuWithRetry = makeBoundedRetry(
+  wireNativeBlockMenu,
+  400,
+  15000
+);
+window.addEventListener("yt-rework:locationchange", wireNativeBlockMenuWithRetry);
+window.addEventListener("yt-navigate-finish", wireNativeBlockMenuWithRetry);
 
 // --- Inbox read state (dim opened videos) ------------------------------------
 // A video is "read" the moment it is OPENED (locked decision) — detected by
@@ -3387,6 +3576,9 @@ function buildStarControl() {
 // that fits the inbox language. Injected onto the byline next to the stars. The
 // menu is built lazily on first open and lists the user's topics (names via
 // textContent — never innerHTML; ids only ever as dataset/attribute values).
+// SUBSCRIPTIONS ONLY (Session L): the inbox is our own surface and the chip is
+// the only way to reach Save-to-topic / Archive there. On search and Peek the
+// chip is gone and YouTube's native ⋮ is back.
 function buildOverflowControl() {
   const wrap = document.createElement("span");
   wrap.className = "ytr-ovf";
@@ -3401,84 +3593,50 @@ function buildOverflowControl() {
   return wrap;
 }
 
-// Build the dropdown menu for one row's overflow control. Save to topic (a list
-// of the user's topics), then — on Subscriptions — Archive, or — on search /
-// Peek (Phase 3) — "⊘ Block channel". All strings via textContent; topic ids ride
-// in dataset only. opts.archive===false omits Archive (search / Peek have no
-// inbox to archive from); opts.block===true adds Block channel (search + Peek
-// only, NEVER Subscriptions — you chose those). Defaults keep Subscriptions
-// unchanged (archive on, block off).
-function buildOverflowMenu(opts) {
-  const withArchive = !(opts && opts.archive === false);
-  const withBlock = !!(opts && opts.block === true);
-  // opts.save===false omits the Save-to-topic section — a channel RESULT
-  // (ytd-channel-renderer) has no video to save, so its menu is Block-only.
-  // Defaults keep every existing caller (video rows) unchanged (save on).
-  const withSave = !(opts && opts.save === false);
+// Build the dropdown menu for one Subscriptions row's overflow control: Save to
+// topic (a list of the user's topics) + Archive. All strings via textContent;
+// topic ids ride in dataset only. (Session L: the search / Peek variants — and
+// with them the "⊘ Block channel" item — are gone. Block now rides YouTube's OWN
+// ⋮ menu, so this builder has exactly one caller again: onSubsClick.)
+function buildOverflowMenu() {
   const menu = document.createElement("div");
   menu.className = "ytr-ovf-menu";
   menu.setAttribute("role", "menu");
 
   // Save to topic — header + a row per topic.
-  if (withSave) {
-    const saveLabel = document.createElement("div");
-    saveLabel.className = "ytr-ovf-section";
-    saveLabel.textContent = "Save to topic";
-    menu.appendChild(saveLabel);
+  const saveLabel = document.createElement("div");
+  saveLabel.className = "ytr-ovf-section";
+  saveLabel.textContent = "Save to topic";
+  menu.appendChild(saveLabel);
 
-    if (!topicsCache.length) {
-      const empty = document.createElement("div");
-      empty.className = "ytr-ovf-empty";
-      empty.textContent = "No topics yet";
-      menu.appendChild(empty);
-    } else {
-      topicsCache.forEach((t) => {
-        const item = document.createElement("button");
-        item.type = "button";
-        item.className = "ytr-ovf-item";
-        item.dataset.ovfSave = t.id;
-        item.setAttribute("role", "menuitem");
-        item.textContent = topicDisplayName(t); // user data -> textContent
-        menu.appendChild(item);
-      });
-    }
+  if (!topicsCache.length) {
+    const empty = document.createElement("div");
+    empty.className = "ytr-ovf-empty";
+    empty.textContent = "No topics yet";
+    menu.appendChild(empty);
+  } else {
+    topicsCache.forEach((t) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "ytr-ovf-item";
+      item.dataset.ovfSave = t.id;
+      item.setAttribute("role", "menuitem");
+      item.textContent = topicDisplayName(t); // user data -> textContent
+      menu.appendChild(item);
+    });
   }
 
   // Archive — clears the row from the inbox (Subscriptions only).
-  if (withArchive) {
-    // Only separate from a section above it (there always is one here — Save).
-    if (menu.childElementCount > 0) {
-      const sep = document.createElement("div");
-      sep.className = "ytr-ovf-sep";
-      menu.appendChild(sep);
-    }
-    const arch = document.createElement("button");
-    arch.type = "button";
-    arch.className = "ytr-ovf-item ytr-ovf-archive";
-    arch.dataset.ovfArchive = "1";
-    arch.setAttribute("role", "menuitem");
-    arch.textContent = "Archive";
-    menu.appendChild(arch);
-  }
-
-  // Block channel — silences the creator everywhere recommendations render
-  // (search + both Peek views + the native home feed). Search / Peek only.
-  if (withBlock) {
-    // A Block-only menu (channel results: save off, archive off) has nothing
-    // above it, so skip the leading separator to avoid a stray rule.
-    if (menu.childElementCount > 0) {
-      const sep = document.createElement("div");
-      sep.className = "ytr-ovf-sep";
-      menu.appendChild(sep);
-    }
-    const block = document.createElement("button");
-    block.type = "button";
-    block.className = "ytr-ovf-item ytr-ovf-block";
-    block.dataset.ovfBlock = "1";
-    block.setAttribute("role", "menuitem");
-    block.textContent = "⊘ Block channel";
-    menu.appendChild(block);
-  }
+  const sep = document.createElement("div");
+  sep.className = "ytr-ovf-sep";
+  menu.appendChild(sep);
+  const arch = document.createElement("button");
+  arch.type = "button";
+  arch.className = "ytr-ovf-item ytr-ovf-archive";
+  arch.dataset.ovfArchive = "1";
+  arch.setAttribute("role", "menuitem");
+  arch.textContent = "Archive";
+  menu.appendChild(arch);
 
   return menu;
 }
@@ -3565,8 +3723,8 @@ function removeSubsHeader() {
   if (bar) bar.remove();
   // Also shed the per-row injected controls (creator stars + ··· overflow). Their
   // CSS is gated on html.yt-rework, so on master-off an orphan would render as a
-  // raw default control — the Subscriptions twin of removeSearchToolbar /
-  // purgeHomeOverflow. No-op once off Subscriptions (subsBrowse() null; the
+  // raw default control — the Subscriptions twin of removeSearchToolbar.
+  // No-op once off Subscriptions (subsBrowse() null; the
   // controls left with the old page). decorateSubscriptions re-injects them
   // idempotently on the next master-on / re-visit.
   const browse = subsBrowse();
@@ -3762,6 +3920,12 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // (S6 off) and drives the Peek reveal; no-op when the Library is shown + not
   // peeking.
   decorateHomeWithRetry();
+  // Session L: hook YouTube's shared menu popup so its ⋮ dropdown gains our
+  // "🚫 Block this channel" row (bounded retry — the container hydrates late).
+  wireNativeBlockMenuWithRetry();
+  // …and stamp the surfaces with no decorate pass of their own (watch sidebar,
+  // grid shelves) on a hard load.
+  reapplyBlockedSweep();
 });
 
 // Seed the progress + read + archived caches (storage.local) so the first
@@ -3859,10 +4023,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (nextView !== peekView) {
       peekView = nextView;
       document.documentElement.setAttribute("data-ytr-peek-view", peekView);
-      // Cross-tab: a view flip in another tab must re-run this tab's home pass so
-      // its rows gain (List) or shed (Grid, via decorateHome's purge) the ···
-      // controls. No-op off home. The acting tab already ran this in setPeekView
-      // and skips here (its peekView is already updated -> nextView === peekView).
+      // Cross-tab: a view flip in another tab must re-run this tab's home pass
+      // (read-dimming stamps are List-only). No-op off home. The acting tab
+      // already ran this in setPeekView and skips here (its peekView is already
+      // updated -> nextView === peekView).
       decorateHomeWithRetry();
     }
 
@@ -3899,7 +4063,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
           .querySelectorAll(STAMPS.map((a) => "[" + a + "]").join(","))
           .forEach((el) => STAMPS.forEach((a) => el.removeAttribute(a)));
         closeOverflowMenus();
+        // …and our row inside YouTube's own ⋮ menu, if one is open right now.
+        removeNativeBlockItem();
       }
+      // Master back ON: the popup observer refuses to wire while off, so ask
+      // for it again here (idempotent — it no-ops once wired).
+      wireNativeBlockMenuWithRetry();
       mountLearningHome();
       renderLearningHome();
       decorateSubscriptionsWithRetry();
