@@ -7,7 +7,7 @@ Edit the runtime files (`content.js`, `subscriptions-list.css`, `popup.*`, `mani
 Test locally: `chrome://extensions` → click **reload (↻)** on the unpacked extension → refresh YouTube.
 
 ## 2. Bump the version
-In `manifest.json`, raise `"version"` — e.g. `1.0.0` → `1.0.1` for a fix, `1.1.0` for a feature.
+In `manifest.json`, raise `"version"` — e.g. `1.1.0` → `1.1.1` for a fix, `1.2.0` for a feature.
 The store **rejects** an upload whose version isn't higher than the live one.
 
 ## 3. Rebuild the ZIP
@@ -20,9 +20,13 @@ unzip -l learntube-<version>.zip   # sanity check: exactly the 6 runtime items, 
 ```
 
 ## 4. Test the ZIP unpacked
-Unzip to a temp folder → **Load unpacked** → walk the key flows: master toggle, Library home,
-Subscriptions inbox (stars / VIP / overflow), a course view, a topic watch page (centered player +
-focus strip), the `/shorts/` redirect, and **master OFF restores native YouTube**.
+Unzip to a temp folder → **Load unpacked** → walk the key flows: master toggle, every per-surface
+switch (each hide off hands that piece back to native YouTube; the feed-button and start-page
+switches turn off LearnTube's own additions), Library home, **Show feed** (Peek) in
+both List and Grid, **⊘ Block channel** from a search or Peek ··· menu plus unblock from the popup's
+Blocked list, Subscriptions inbox (stars / VIP / overflow), a course view (including a manual
+lecture tick / un-tick), a topic watch page (centered player + focus strip), the `/shorts/`
+redirect, and **master OFF restores native YouTube**.
 
 ## 5. Upload the update
 Developer Dashboard → **LearnTube** → **Package** → **Upload new package** → fill anything new in the
@@ -38,4 +42,19 @@ git push origin v<version>
 gh release create v<version> --title "v<version>" --notes "What changed in this version."
 ```
 
-Keep `README.md` and `PRIVACY.md` in sync whenever behavior or permissions change.
+Keep `README.md` and `PRIVACY.md` in sync whenever behavior or permissions change — and add the new
+surface to the dropdown in `.github/ISSUE_TEMPLATE/layout-breakage.yml` if the release adds one.
+
+## Shipped so far
+
+- **[v1.1.0 — The Switchboard](https://github.com/Jenish-Shobhit/learntube/releases/tag/v1.1.0)**
+  (7 July 2026, live on the store) — the popup becomes a switchboard: a master switch plus a
+  per-surface switch for each hide (Shorts, watch suggestions, comments, end screens & cards, the
+  top bar, Home → Library) plus the **Show feed button** and **Start on Subscriptions** switches. Adds **Show feed**
+  (Peek) — the real feed on request, as a List or a Grid, remembered but never reordered — and
+  **⊘ Block channel** from any search or Peek ··· menu, unblockable from the popup's Blocked list.
+  Plus monotonic course progress, manual lecture ticks, overflow menus on lazily loaded rows,
+  light-mode Peek fixes, and a Continue-first centered Library.
+- **[v1.0.0](https://github.com/Jenish-Shobhit/learntube/releases/tag/v1.0.0)** (18 June 2026) —
+  first public release: the master switch, Shorts removal and `/shorts/` redirect, the Subscriptions
+  inbox, the Learning home, and the distraction-free watch page.

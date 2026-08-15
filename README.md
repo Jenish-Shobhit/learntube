@@ -2,8 +2,8 @@
 
 **Turn YouTube into a calm place to learn.** LearnTube is a tiny, open-source
 Manifest V3 extension for Chromium browsers that strips the distractions out of
-YouTube and reshapes it into a focused study tool — all with one master on/off
-switch.
+YouTube and reshapes it into a focused study tool — from one master on/off
+switch, with a per-surface switch for any piece you want handed back.
 
 > No build step, no dependencies, no tracking. The source files in this
 > repository *are* the shipped extension.
@@ -16,12 +16,14 @@ switch.
 
 - **One master switch.** Click the toolbar icon to toggle the entire rework on
   or off. Off means plain, untouched YouTube — instantly.
-- **A switchboard of seven switches.** Under the master switch, the popup gives
+- **A switchboard of eight switches.** Under the master switch, the popup gives
   you a switch per distraction — **Hide Shorts**, **Hide watch suggestions**,
   **Hide comments**, **Hide end screens & cards**, **Simplify the top bar**,
-  **Replace Home with your Library**, and **Start on Subscriptions**. Each one
-  hands that piece of YouTube back to native when you flip it off; the defaults
-  are the classic LearnTube 1.0 experience.
+  **Replace Home with your Library**, **Show feed button**, and **Start on
+  Subscriptions**. Each hide hands that piece of YouTube back to native when you
+  flip it off; **Show feed button** and **Start on Subscriptions** switch off
+  LearnTube's own additions instead. The defaults are the classic LearnTube 1.0
+  experience plus the feed button.
 - **Shorts, gone.** Shorts shelves, tiles, and the sidebar entry are hidden
   site-wide, and any `/shorts/*` link is redirected to the normal player (Back
   won't bounce you into a Short). Flip **Hide Shorts** off and Shorts return.
@@ -32,10 +34,12 @@ switch.
 - **A Learning home — with Peek.** The recommendation-stuffed home page is
   replaced with your own library: add YouTube playlists as "topics" and
   LearnTube tracks how far through each one you are, with a quiet "Continue where
-  you left off" row and a per-course lecture checklist. Press **◉ Peek** to
-  reveal, on request, exactly what the algorithm would have shown you —
-  underneath your topics, in a Grid or a calm two-line List view (your choice is
-  remembered). It's display-only; peeking never feeds the algorithm.
+  you left off" row and a per-course lecture checklist — progress is read off
+  YouTube's own resume bars, and you can tick (or un-tick) a lecture by hand
+  when the scrape and reality disagree. Press **Show feed** to reveal, on
+  request, exactly what the algorithm would have shown you — underneath your
+  topics, in a calm two-line List or a Grid view (your choice is remembered).
+  It's display-only; peeking never feeds the algorithm.
 - **Block a channel for good.** Choose **⊘ Block channel** from the ··· menu on
   any search result or Peek row, and that creator's videos leave everywhere
   recommendations render — search, both Peek views, and the native home feed.
@@ -79,8 +83,9 @@ LearnTube is private by design:
 - **No data is collected, sold, or shared.** There are no servers, no
   analytics, and no accounts.
 - **All state lives on your device** in the browser's `chrome.storage` (your
-  settings sync via your own browser account if you have sync on; watched
-  progress and read/archived state stay local). **Nothing is ever sent
+  settings — the switches, your topics, stars, and your blocked-channel list —
+  sync via your own browser account if you have sync on; watched progress,
+  lecture ticks, and read/archived state stay local). **Nothing is ever sent
   off-device by the extension.**
 - **No remote code.** The extension runs only the JavaScript and CSS bundled in
   this folder — it loads nothing from the network.

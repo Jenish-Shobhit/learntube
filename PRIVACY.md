@@ -1,6 +1,6 @@
 # Privacy Policy — LearnTube
 
-**Last updated: 18 June 2026**
+**Last updated: 15 August 2026**
 
 LearnTube is a browser extension that reworks the YouTube interface locally in
 your browser. It is built to be private by design.
@@ -22,14 +22,16 @@ between visits. All of it is stored **on your device** using the browser's
 standard `chrome.storage` API:
 
 - **`chrome.storage.sync`** — your settings: the master on/off switch, the
-  topics/playlists you add to the Learning home, and your per-creator star
-  ratings. (If you are signed in to your browser, the browser itself may sync
-  this small settings object across your own devices — this is the browser's
-  built-in sync, handled entirely by the browser, never by LearnTube or any
-  LearnTube server.)
+  per-surface switches, the topics/playlists you add to the Learning home, your
+  per-creator star ratings, your remembered feed-reveal view (List or Grid), and
+  the list of channels you have blocked. (If you are signed in to your browser,
+  the browser itself may sync this small settings object across your own
+  devices — this is the browser's built-in sync, handled entirely by the
+  browser, never by LearnTube or any LearnTube server.)
 - **`chrome.storage.local`** — device-local cache: which videos you have opened
-  ("read" state), watched-progress for the playlists you track, and which
-  Subscriptions rows you have archived.
+  ("read" state), watched-progress for the playlists you track — including any
+  lecture you tick or un-tick by hand — and which Subscriptions rows you have
+  archived.
 
 This data never leaves the browser. It is sent to no external service and is
 used only to render the extension's own UI.

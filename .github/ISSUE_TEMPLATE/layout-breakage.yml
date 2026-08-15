@@ -15,6 +15,9 @@ body:
       options:
         - Subscriptions (the inbox list)
         - Home (the Library)
+        - Show feed / Peek (the List or Grid reveal)
+        - Block channel (or the popup's Blocked list)
+        - The popup switchboard (a switch does nothing / the wrong thing)
         - A course view
         - A watch page (centered player / focus strip)
         - Search ("Find" / Lectures lens)
@@ -42,6 +45,14 @@ body:
       placeholder: e.g. Chrome 138 on macOS
     validations:
       required: true
+  - type: input
+    id: version
+    attributes:
+      label: LearnTube version
+      description: Shown on `chrome://extensions` under LearnTube.
+      placeholder: e.g. 1.1.0
+    validations:
+      required: false
   - type: textarea
     id: screenshot
     attributes:
