@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "LearnTube",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "minimum_chrome_version": "105",
   "description": "A calmer YouTube for learning: switches that hide Shorts and clutter, a Library of your playlists, and a quiet Subscriptions inbox.",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -13,9 +15,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
-      "css": ["subscriptions-list.css"],
-      "js": ["content.js"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "css": [
+        "subscriptions-list.css"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start"
     }
   ],

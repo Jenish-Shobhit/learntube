@@ -1,7 +1,10 @@
 /// Runs at document_start on every youtube.com page.
-// It only adds a class to <html>; all the actual work is in the CSS.
-// <html> is never replaced during YouTube's SPA navigation, so the class
-// (and therefore the rework) survives moving between pages.
+// The master switch is a single class on <html>, and the CSS does as much of
+// the rework as CSS can. <html> is never replaced during YouTube's SPA
+// navigation, so the class (and therefore the rework) survives moving between
+// pages. Everything CSS cannot do lives here too: the /shorts route redirect,
+// the injected Library / course / focus-strip DOM, the playlist scrape, the
+// Block row inside YouTube's own menu, and all chrome.storage state.
 
 // All durable state lives in a single chrome.storage.sync object under
 // SETTINGS_KEY. masterEnabled is the master on/off switch. Future steps add
@@ -12,8 +15,9 @@ const DEFAULT_SETTINGS = { masterEnabled: true };
 // Legacy key from the old "Subscriptions — List View" build; migrated once.
 const LEGACY_KEY = "listModeEnabled";
 
-// Live copy of the master-enabled state, used by the Shorts route redirect so
-// toggling the switch off also stops redirecting. apply() keeps it in sync.
+// Live copy of the master-enabled state, read by every JS gate the CSS class
+// can't cover (the Shorts redirect, the scrape, every stamp pass), so toggling
+// the switch off stops all of them too. apply() keeps it in sync.
 let reworkEnabled = false;
 
 function apply(enabled) {
@@ -21,9 +25,9 @@ function apply(enabled) {
   document.documentElement.classList.toggle("yt-rework", reworkEnabled);
 }
 
-// --- v1.1 "The Switchboard" — the seven switches, Peek, Block -----------------
+// --- v1.1 "The Switchboard" — the eight switches, Peek, Block ----------------
 // All durable state still rides the ONE synced `settings` object (zero new
-// top-level keys). Phase 1 adds `settings.toggles` (the seven switches); Phase 2
+// top-level keys). Phase 1 adds `settings.toggles` (the switches); Phase 2
 // adds `settings.peekView` ("grid"|"list", the remembered Peek view); Phase 3
 // adds `settings.blockedCreators` ({ "<channelKey>": ts }). Every field is
 // ABSENT on a v1.0 install and reads as its default, so an untouched upgrade
@@ -65,8 +69,8 @@ function readToggles(settings) {
 
 // Stamp the six data-ytr-show-* attrs on <html>: presence = the user opted OUT
 // of that hide (switch off). startOnSubscriptions has no CSS, so no attr here.
-function applyToggles(t) {
-  t = t || togglesCache;
+function applyToggles() {
+  const t = togglesCache;
   const h = document.documentElement;
   h.toggleAttribute("data-ytr-show-shorts", t.hideShorts === false);
   h.toggleAttribute("data-ytr-show-suggestions", t.hideWatchSuggestions === false);
@@ -276,10 +280,11 @@ function addVideoToTopic(topicId, videoId) {
 }
 
 // --- The ONE playlist->topic writer ------------------------------------------
-// Session M extracted these two out of handleAction (the Library's paste flow)
-// so every surface that can file a playlist — the Library's "+ Add" row, the
-// first-run empty state, and the playlist page's "＋ Add to LearnTube" button —
-// goes through the SAME mutation. Both are read-modify-write via mutateTopics
+// Session M extracted these two out of handleAction so every surface that can
+// file a playlist — the course view's "add playlist" row (addPlaylistToTopic),
+// the first-run empty state (createTopicWithPlaylist), and the
+// playlist page's "＋ Add to LearnTube" button (both, via the panel) — goes
+// through the SAME mutation. Both are read-modify-write via mutateTopics
 // (masterEnabled / stars / videos are never clobbered) and both de-dupe by
 // playlist id. Neither re-renders: storage.onChanged drives every surface.
 // The optional `done(ok)` hook reports whether the topic was actually found and
@@ -446,8 +451,10 @@ function progressRatioFor(renderer) {
 // on-page title and duration label, stored as OPTIONAL fields —
 //   progress[list].videos[] = { id, title?, duration?, watched, ratio }
 // A missed read stores nothing (field omitted, never a placeholder), and the
-// merge below never blanks a known value. No render consumes these yet; this
-// capability unlocks the later Library/Course/Lecture rebuilds.
+// merge below never blanks a known value. The Continue row, the course view's
+// lecture checklist and the focus strip all render these real scraped fields —
+// a record without them falls back to the honest "open once" line, never a
+// fabricated "Lecture N".
 
 // Read a playlist row's real on-page video title. Drift-tolerant across both
 // layouts and both class generations: a#video-title (dedicated /playlist page),
@@ -621,7 +628,7 @@ function mutateVideoDone(listId, videoId, done) {
 }
 
 // Drop progress records for playlists no longer referenced by ANY topic. The
-// delete-topic / remove-playlist paths only edit settings.topics — neither
+// delete-topic path only edits settings.topics — it never
 // touches storage.local.progress — so a deleted topic's scraped record would
 // linger forever. This bounds the map to the user's current topic set. Called
 // after every topicsCache refresh (sync onChanged) and once from each hard-load
@@ -1126,12 +1133,6 @@ function backfillMissingPlaylistScrapes() {
   setTimeout(() => step(0), 2000);
 }
 
-// Join the progress cache against a topic's playlists: percentage = watched /
-// total known, and the first unwatched video (in playlist order) for resume.
-// `resuming` is true when that first-unwatched video is partially watched
-// (ratio > 0) — currently unconsumed (the Step-12 hint that read it is gone);
-// kept as an additive derived field. Extra keys are additive; callers ignore
-// what they don't use.
 // --- K2: the ONE "complete" helper -------------------------------------------
 // A lecture is complete if the scrape marked it watched OR the user manually
 // ticked it (done === true). A manual UN-tick (done === false) is the single
@@ -1148,26 +1149,24 @@ function isLectureComplete(v) {
   return !!v.watched;
 }
 
+// Join the progress cache against a topic's playlists: percentage = watched /
+// total known, and the first unwatched video (in playlist order) for resume.
 function topicProgress(topic) {
   const playlists = Array.isArray(topic.playlists) ? topic.playlists : [];
   let total = 0;
   let watched = 0;
   let next = null; // { videoId, listId }
-  let resuming = false;
   playlists.forEach((pl) => {
     const rec = progressCache[pl.id];
     const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
     vids.forEach((v) => {
       total += 1;
       if (isLectureComplete(v)) watched += 1;
-      else if (!next) {
-        next = { videoId: v.id, listId: pl.id };
-        resuming = v.ratio > 0;
-      }
+      else if (!next) next = { videoId: v.id, listId: pl.id };
     });
   });
   const pct = total > 0 ? Math.round((watched / total) * 100) : 0;
-  return { pct, watched, total, next, resuming };
+  return { pct, watched, total, next };
 }
 
 function resumeUrl(next) {
@@ -1185,24 +1184,21 @@ function playlistUrl(id) {
   return "https://www.youtube.com/playlist?list=" + encodeURIComponent(id);
 }
 
-// Per-playlist watched-state from the local cache: title (if scraped), counts,
-// percentage, and the first unwatched video id (for a per-playlist resume).
+// Per-playlist watched-state from the local cache: title (if scraped) + counts.
+// (No pct / next here: the one caller, renderModule, renders "N of M" and the
+// module title only — the course view's own progress bar and Resume link come
+// from topicProgress.)
 function playlistProgress(plId) {
   const rec = progressCache[plId];
   const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
   let watched = 0;
-  let next = null;
   vids.forEach((v) => {
     if (isLectureComplete(v)) watched += 1;
-    else if (!next) next = v.id;
   });
-  const total = vids.length;
   return {
     title: (rec && rec.title) || "",
-    total,
+    total: vids.length,
     watched,
-    pct: total > 0 ? Math.round((watched / total) * 100) : 0,
-    next,
   };
 }
 
@@ -1545,9 +1541,11 @@ function renderContinue() {
   return row;
 }
 
-// Phase 2: the Library header's Peek controls — the "◉ Peek" pill (tooltip: the
-// plain sentence) plus, while peeking, a List | Grid segmented switcher. The pill
-// lives only on the Library, so it exists only while S6 (replaceHome) is on —
+// Phase 2: the Peek controls — the "Show feed" pill (tooltip: the plain
+// sentence) plus, while peeking, a List | Grid segmented switcher. K5 moved
+// them out of the Library header into the bottom .ytr-feed-bar (renderFeedBar),
+// just above where the feed reveals. They live only on the Library, so they
+// exist only while S6 (replaceHome) is on —
 // exactly the spec's "the Peek pill exists only while this switch is ON". Static
 // glyphs/labels via textContent; the pill's id lets setPeek re-sync aria-pressed.
 function renderPeekControls() {
@@ -2110,19 +2108,9 @@ function handleAction(action, el) {
     return;
   }
 
-  // Currently un-triggered on the Library (the Desk's playlist rows left in
-  // Step 21); kept for the Step-22 course-view module management.
-  if (action === "remove-playlist") {
-    const chip = el.closest("[data-pl-id]");
-    const plId = chip && chip.getAttribute("data-pl-id");
-    if (!plId) return;
-    mutateTopics((s) => {
-      const t = s.topics.find((x) => x.id === topicId);
-      if (t && Array.isArray(t.playlists))
-        t.playlists = t.playlists.filter((p) => p.id !== plId);
-    });
-    return;
-  }
+  // (No "remove-playlist" action: nothing in the Library or the course view
+  // renders a per-module remove control, so a playlist leaves a topic only by
+  // deleting the topic. The branch that once handled it was dead code.)
 
   if (action === "rename-topic") {
     closeCardMenus(); // a cancelled prompt must not leave the menu open
@@ -2196,9 +2184,9 @@ function onLearningKeydown(e) {
   }
 }
 
-// (Step 22: onLearningFocusOut — the per-lecture note save — is gone with the
-// course view's note inputs. The watch rail's own note path survives until
-// step 23.)
+// (No focus-out handler: onLearningFocusOut saved the per-lecture notes, and
+// notes are a killed non-goal — removed from the course view in Step 22 and
+// from the watch rail in Step 23. Nothing on these surfaces persists on blur.)
 
 // --- Step 13: drag-to-reorder (delegated on the Learning root) ----------------
 // Native HTML5 DnD — CSS can't reorder by drag. The ⋮⋮ grip is the draggable
@@ -2243,7 +2231,8 @@ function onLearningDragStart(e) {
 }
 
 // Whether to drop before/after a candidate, by comparing the pointer to its
-// vertical midpoint (robust for both the stacked playlist list and the grid).
+// vertical midpoint. Step 21: the card grid is the only drop surface left
+// (dropCandidate rejects anything outside .ytr-grid).
 function beforeOrAfter(e, el) {
   const r = el.getBoundingClientRect();
   return e.clientY < r.top + r.height / 2 ? "before" : "after";
@@ -2461,7 +2450,7 @@ function decorateSubscriptions() {
   rows.forEach((row) => {
     // Video id (for read dimming / archive hiding) — stamp once.
     if (!row.getAttribute(MAILROW_FLAG)) {
-      const vid = subsRowVideoId(row, null);
+      const vid = subsRowVideoId(row);
       if (vid) row.setAttribute("data-ytr-vid", vid);
       row.setAttribute(MAILROW_FLAG, "1");
       changed = true;
@@ -2613,7 +2602,8 @@ const homeDecorateObserver = makeDecorateObserver(
 
 // Parse a duration label ("12:34", "1:02:03", "0:48") to integer seconds.
 // Returns null for empty / non-numeric (live, upcoming, mixes, playlists, or a
-// non-time badge) — null is NEVER stamped, so those are never hidden by the lens.
+// non-time badge) — a null duration is simply never stored on the scraped
+// lecture record, so a row with an unreadable badge just has no duration.
 function parseDurationToSeconds(text) {
   const s = (text || "").trim();
   if (!s || !/^\d{1,2}(:\d{2}){1,2}$/.test(s)) return null;
@@ -2644,7 +2634,7 @@ function parseDurationToSeconds(text) {
 // the pass costs one flat query for tags that are almost never present.
 // TOGGLES (never one-shot): YouTube re-uses these section nodes across queries,
 // so a section that no longer holds a Shorts shelf must lose the stamp or the
-// next search would render a hole. Returns true if anything moved.
+// next search would render a hole.
 const SHORTS_SECTION_FLAG = "data-ytr-shorts-section";
 const SHORTS_SHELF_SELECTOR =
   "ytd-reel-shelf-renderer, ytm-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts]";
@@ -2664,18 +2654,15 @@ function stampShortsSections(root) {
         want.add(el);
     }
   });
-  let changed = false;
   root.querySelectorAll("[" + SHORTS_SECTION_FLAG + "]").forEach((el) => {
-    if (want.has(el)) return;
-    el.removeAttribute(SHORTS_SECTION_FLAG); // section re-used for a new query
-    changed = true;
+    if (!want.has(el)) el.removeAttribute(SHORTS_SECTION_FLAG); // re-used section
   });
   want.forEach((el) => {
-    if (el.hasAttribute(SHORTS_SECTION_FLAG)) return;
-    el.setAttribute(SHORTS_SECTION_FLAG, "1");
-    changed = true;
+    // Guarded: this sweep re-runs every 400ms, and re-setting an attribute to
+    // the same value still costs a mutation record + style invalidation.
+    if (!el.hasAttribute(SHORTS_SECTION_FLAG))
+      el.setAttribute(SHORTS_SECTION_FLAG, "1");
   });
-  return changed;
 }
 
 // --- Phase 2: Peek — the algorithm on request (display-only) ------------------
@@ -2726,8 +2713,8 @@ function setPeekView(view) {
 //  (1) Block (B2): stamp data-ytr-blocked on every row whose channel is blocked
 //      — so blocked creators leave the feed everywhere it renders (native + both
 //      Peek views). Runs in BOTH modes.
-//  (2) Peek List: stamp the row's video id so opened rows dim like read mail —
-//      only in the list view (grid stays native).
+//  (2) Peek: stamp the row's video id in BOTH views; the read-dimming it feeds
+//      is applied List-only (grid stays native).
 // Reuses the Subscriptions helpers (subsRowVideoId / subsRowChannelKey) — Home
 // and Subscriptions are the same row elements. Session L: no ··· chip is
 // injected here any more (Block rides YouTube's own ⋮ menu), so the native
@@ -2770,7 +2757,7 @@ function decorateHome() {
     // is List-scoped anyway).
     if (peekOn) {
       if (!row.getAttribute("data-ytr-vid")) {
-        const vid = subsRowVideoId(row, null);
+        const vid = subsRowVideoId(row);
         if (vid) {
           row.setAttribute("data-ytr-vid", vid);
           changed = true;
@@ -3983,7 +3970,7 @@ window.addEventListener("yt-navigate-finish", mountPlaylistAddWithRetry);
 // A video is "read" the moment it is OPENED (locked decision) — detected by
 // reading the /watch route's v= id, not by intercepting clicks. Read state is a
 // per-video-id map persisted in chrome.storage.LOCAL (large, device-local,
-// re-derivable; the 8KB sync item cap would blow). CSS section 11e dims read
+// re-derivable; the 8KB sync item cap would blow). CSS section 11 dims read
 // rows like read mail (the only read-state UI — kept minimal, no count banner).
 // JS reads ids, persists/looks up state, and stamps data-ytr-read.
 const READ_KEY = "read";
@@ -3999,10 +3986,8 @@ let readCache = {};
 
 // Resolve a Subscriptions row's video id from its title/thumbnail link. Reuses
 // videoIdFromHref (strips &list=/&t= etc.). Fail-quiet: null -> row not tracked.
-function subsRowVideoId(row, title) {
+function subsRowVideoId(row) {
   const a =
-    (title && title.matches && title.matches("a[href]") ? title : null) ||
-    (title && title.querySelector && title.querySelector("a[href]")) ||
     row.querySelector("a#video-title-link[href]") ||
     row.querySelector("a#thumbnail[href]") ||
     row.querySelector('a[href*="watch"]'); // covers both Polymer + Wiz lockups
@@ -4047,14 +4032,8 @@ function refreshSubsArchived(browse) {
 // and fires yt-navigate-finish; navigating back re-decorates the now-read row.
 function markCurrentWatchRead() {
   if (!reworkEnabled) return;
-  if (location.pathname !== "/watch") return;
-  let vid = null;
-  try {
-    vid = new URL(location.href).searchParams.get("v");
-  } catch (_) {
-    return;
-  }
-  if (!vid || readCache[vid]) return; // unknown or already read -> no write
+  const vid = currentWatchVideoId(); // same /watch gate + v= read, one place
+  if (!vid || readCache[vid]) return; // off-page, unknown, or already read
   readCache[vid] = Date.now(); // optimistic local update
   chrome.storage.local.get({ [READ_KEY]: {} }, (res) => {
     const read = res[READ_KEY] || {};
@@ -4284,7 +4263,7 @@ function setRoomActive(on) {
 
 // Speed pill label: "1×", "1.25×", … (an off-list native rate shows as-is).
 function speedLabel(rate) {
-  return (rate === 1 ? "1" : String(rate)) + "×";
+  return String(rate) + "×";
 }
 
 function removeFocusStrip() {
@@ -4445,10 +4424,11 @@ function renderFocusStrip(ctx) {
   }
 }
 
-// Delegated capture-phase click for the strip's two live pieces. Back lets
+// Delegated capture-phase click for the strip's three live pieces. Back lets
 // the native <a href="/"> proceed (YouTube's router — or a hard load — does
-// the navigation; we only arm the open-course hint). Speed re-reads the live
-// <video> each click (the player can swap the element across SPA nav).
+// the navigation; we only arm the open-course hint). Up next (Session G)
+// toggles the lecture list. Speed re-reads the live <video> each click (the
+// player can swap the element across SPA nav).
 function onRoomClick(e) {
   const t = e.target;
   if (!t || !t.closest) return;
@@ -4572,7 +4552,7 @@ function archiveVideo(videoId) {
 // Ratings are small, bounded, user-authored -> stored in the SYNCED settings
 // object under `settings.stars` ({ "<channelKey>": 1..5 }), so they ride along
 // to every device via the browser's own account sync (no server / database).
-// CSS section 6j styles the glyphs; JS resolves each row's channel key, persists
+// CSS section 6i styles the glyphs; JS resolves each row's channel key, persists
 // /looks up the rating, injects the buttons, and toggles their filled state.
 
 // Live mirror of settings.stars; seeded on load + kept fresh by onChanged.
@@ -4712,9 +4692,8 @@ function buildOverflowMenu() {
 }
 
 // Close any open overflow menu and reset its control's pressed state.
-function closeOverflowMenus(except) {
+function closeOverflowMenus() {
   document.querySelectorAll(".ytr-ovf.is-open").forEach((w) => {
-    if (w === except) return;
     w.classList.remove("is-open");
     const m = w.querySelector(".ytr-ovf-menu");
     if (m) m.remove();
@@ -4905,9 +4884,9 @@ function onSubsClick(e) {
     return;
   }
 
-  // 6. Click anywhere else inside the browse with a menu open -> close it (do
-  // NOT swallow the click; let native navigation proceed).
-  if (document.querySelector(".ytr-ovf.is-open")) closeOverflowMenus();
+  // 6. Click anywhere else inside the browse -> close any open menu (do NOT
+  // swallow the click; let native navigation proceed). No-op when none is open.
+  closeOverflowMenus();
 }
 
 // Re-apply each row's rating to data-ytr-star + the control's filled glyphs.
@@ -4939,7 +4918,7 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   apply(settings.masterEnabled);
   // Phase 1: seed the switches + stamp the data-ytr-show-* opt-out attrs.
   togglesCache = readToggles(settings);
-  applyToggles(togglesCache);
+  applyToggles();
   // Phase 2: seed the remembered Peek view (grid default) onto <html> — the list
   // restyle keys on it, but only matters once data-ytr-peek is also set.
   peekView = settings.peekView === "list" ? "list" : "grid";
@@ -5099,7 +5078,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     // v1.1 mirrors: refresh + re-stamp the show-* attrs / remembered Peek view /
     // blocklist on every settings write (cheap, and keeps cross-tab tabs honest).
     togglesCache = readToggles(next);
-    applyToggles(togglesCache);
+    applyToggles();
     blockedCache =
       next.blockedCreators && typeof next.blockedCreators === "object"
         ? next.blockedCreators
@@ -5203,7 +5182,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
       reapplyBlockedSweep();
     }
     if (topicsChanged) {
-      // A delete-topic / remove-playlist may have orphaned a scraped record.
+      // A delete-topic may have orphaned a scraped record.
       pruneOrphanProgress();
       // The Library reflects the new topic set / order.
       mountLearningHome();

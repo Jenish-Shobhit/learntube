@@ -1862,9 +1862,10 @@ html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-shelf-renderer[data-yt
    only when the video resolves to a topic). 15b styles that one
    injected focus strip
    (#yt-rework-focus-strip, mounted by content.js at the top of #below):
-   "‹ Back to <topic>" · "Lecture N of M" · a Speed pill · "Next
-   lecture →" — nothing else (no second lecture rail, no notes, no
-   Listen/Offline: killed non-goals, doc §05). All --lt-* tokens
+   "‹ Back to <topic>" · "Lecture N of M" · a Speed pill · an "Up next ▾"
+   toggle over the lecture list (Session G) · "← Previous lecture"
+   (Session O) · "Next lecture →" — nothing else (no second lecture rail,
+   no notes, no Listen/Offline: killed non-goals, doc §05). All --lt-* tokens
    (defined on html.yt-rework, so they reach this page), theme-aware via
    the html.yt-rework[dark] flip. YouTube styles the watch columns, so
    structural props use !important. The strip uses our OWN id, so no

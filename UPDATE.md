@@ -22,11 +22,15 @@ unzip -l learntube-<version>.zip   # sanity check: exactly the 6 runtime items, 
 ## 4. Test the ZIP unpacked
 Unzip to a temp folder → **Load unpacked** → walk the key flows: master toggle, every per-surface
 switch (each hide off hands that piece back to native YouTube; the feed-button and start-page
-switches turn off LearnTube's own additions), Library home, **Show feed** (Peek) in
-both List and Grid, **⊘ Block channel** from a search or Peek ··· menu plus unblock from the popup's
-Blocked list, Subscriptions inbox (stars / VIP / overflow), a course view (including a manual
-lecture tick / un-tick), a topic watch page (centered player + focus strip), the `/shorts/`
-redirect, and **master OFF restores native YouTube**.
+switches turn off LearnTube's own additions), native search (results load at YouTube's own speed;
+blocked channels still vanish, Shorts sections still collapse), Library home, **Show feed** (Peek)
+in both List and Grid, **⊘ Block channel** from YouTube's own **⋮** menu on a search result / home
+or Peek card / watch-page sidebar (and confirm it's a no-op inside a playlist, on Subscriptions, and
+on a channel's own page) plus unblock from the popup's Blocked list, adding a playlist via the popup
+or the playlist page's **＋ Add to LearnTube** button and checking it hydrates title/lectures right
+away, Subscriptions inbox (stars / VIP / overflow), a course view (including a manual lecture tick /
+un-tick), a topic watch page (centered player + focus strip, **Up next ▾** and **← Previous lecture**),
+the `/shorts/` redirect, and **master OFF restores native YouTube**.
 
 ## 5. Upload the update
 Developer Dashboard → **LearnTube** → **Package** → **Upload new package** → fill anything new in the
@@ -52,7 +56,8 @@ surface to the dropdown in `.github/ISSUE_TEMPLATE/layout-breakage.yml` if the r
   per-surface switch for each hide (Shorts, watch suggestions, comments, end screens & cards, the
   top bar, Home → Library) plus the **Show feed button** and **Start on Subscriptions** switches. Adds **Show feed**
   (Peek) — the real feed on request, as a List or a Grid, remembered but never reordered — and
-  **⊘ Block channel** from any search or Peek ··· menu, unblockable from the popup's Blocked list.
+  **⊘ Block channel**, then living on a custom search/Peek ··· menu (moved into YouTube's own **⋮**
+  menu in v1.2), unblockable from the popup's Blocked list.
   Plus monotonic course progress, manual lecture ticks, overflow menus on lazily loaded rows,
   light-mode Peek fixes, and a Continue-first centered Library.
 - **[v1.0.0](https://github.com/Jenish-Shobhit/learntube/releases/tag/v1.0.0)** (18 June 2026) —

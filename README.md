@@ -32,30 +32,41 @@ switch, with a per-surface switch for any piece you want handed back.
   dim like read mail, you can star creators, filter to your VIPs, and save a
   video to a learning topic — all without leaving the page.
 - **A Learning home — with Peek.** The recommendation-stuffed home page is
-  replaced with your own library: add YouTube playlists as "topics" and
-  LearnTube tracks how far through each one you are, with a quiet "Continue where
-  you left off" row and a per-course lecture checklist — progress is read off
-  YouTube's own resume bars, and you can tick (or un-tick) a lecture by hand
-  when the scrape and reality disagree. Press **Show feed** to reveal, on
-  request, exactly what the algorithm would have shown you — underneath your
-  topics, in a calm two-line List or a Grid view (your choice is remembered).
-  It's display-only; peeking never feeds the algorithm.
+  replaced with your own library: add YouTube playlists as "topics" — either
+  from the popup or with the **＋ Add to LearnTube** button LearnTube adds to
+  the playlist page's own header — and LearnTube tracks how far through each
+  one you are, with a quiet "Continue where you left off" row and a per-course
+  lecture checklist. Adding a topic hydrates it right away with a background
+  fetch of the playlist's own page, so the title, lecture count, and order show
+  up immediately; that first fetch only reads the playlist's initial batch of
+  lectures (typically the first ten to seventeen), so a long course fills in
+  the rest — and picks up real watch progress — the first time you actually
+  open it. Progress is otherwise read off YouTube's own resume bars, and you
+  can tick (or un-tick) a lecture by hand when the scrape and reality disagree.
+  Press **Show feed** to reveal, on request, exactly what the algorithm would
+  have shown you — underneath your topics, in a calm two-line List or a Grid
+  view (your choice is remembered). It's display-only; peeking never feeds the
+  algorithm.
 - **Block a channel for good.** Open a video's ordinary **⋮** menu — YouTube's
   own, on a search result, a home or Peek card, or the watch page's sidebar —
   and pick **🚫 Block this channel**. That creator's videos then leave
   everywhere recommendations render: search, both Peek views, the native home
   feed, the watch-page sidebar and grid shelves. Blocks sync across your
-  devices; unblock from the popup's Blocked list. (Subscriptions stays
-  untouched — you chose those — and playlists are never touched, so blocking
-  can't hide your own course.)
+  devices; unblock from the popup's Blocked list. Blocking is context-aware, so
+  it never hides rows inside a playlist or course, on the watch-page queue, on
+  your own Subscriptions feed, or on a channel's own page — those are always
+  left alone.
 - **Fewer distractions everywhere.** Watch-page "up next" suggestions, comments,
   and end-screen cards are removed — on a lecture inside one of your topics, an
-  **Up next ▾** pill brings back just the coming lectures' titles, on demand —
-  and the masthead is reclaimed down to [logo · search · account].
-- **Search is left alone.** LearnTube adds no layout, no filter and no chrome to
-  the results page: you get YouTube's own search, at YouTube's own speed. The
-  only two things that carry over are the site-wide Shorts hiding and your
-  blocked channels.
+  **Up next ▾** pill brings back just the coming lectures' titles on demand,
+  and a **← Previous lecture** pill sits alongside it so you can step back
+  without leaving the focus strip — and the masthead is reclaimed down to
+  [logo · search · account].
+- **Search is left alone.** LearnTube doesn't touch the results page at all —
+  no lens, no toolbar, no restyle — so you get YouTube's own search, at
+  YouTube's own speed. The only two things that carry over are the site-wide
+  Shorts hiding and your blocked channels, both quietly stamped onto the rows
+  YouTube renders.
 
 Everything is display-only: LearnTube **never reorders your feed or touches
 YouTube's recommendation algorithm.** It only hides, restyles, and adds its own
@@ -94,7 +105,10 @@ LearnTube is private by design:
   lecture ticks, and read/archived state stay local). **Nothing is ever sent
   off-device by the extension.**
 - **No remote code.** The extension runs only the JavaScript and CSS bundled in
-  this folder — it loads nothing from the network.
+  this folder — nothing is ever downloaded and run. The one network call it
+  makes itself is a same-origin fetch of a YouTube playlist page you've just
+  added, to read that playlist's own public title/lecture data; see
+  [PRIVACY.md](PRIVACY.md) for details.
 
 See [PRIVACY.md](PRIVACY.md) for the full policy.
 

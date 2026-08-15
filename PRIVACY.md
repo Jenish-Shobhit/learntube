@@ -1,6 +1,6 @@
 # Privacy Policy — LearnTube
 
-**Last updated: 15 August 2026**
+**Last updated: 16 August 2026**
 
 LearnTube is a browser extension that reworks the YouTube interface locally in
 your browser. It is built to be private by design.
@@ -38,9 +38,18 @@ used only to render the extension's own UI.
 
 ## Network requests
 
-LearnTube makes **no network requests of its own** and loads **no remote
-code**. It runs only the JavaScript and CSS bundled inside the extension. The
-only network activity on the page is YouTube's own — exactly as it would be
+LearnTube loads **no remote code** — it runs only the JavaScript and CSS
+bundled inside the extension, never anything downloaded and executed.
+
+It does make one network request of its own: when you add a YouTube playlist
+as a topic, LearnTube fetches that playlist's own page directly from
+`youtube.com` (a same-origin request, credentials included, exactly like your
+browser already makes when you open the page yourself) to read the playlist's
+public title and lecture list right away, instead of waiting for you to open
+it. No new host is contacted, nothing is sent anywhere off the YouTube domain
+you're already on, and the result is parsed and written straight into your
+local watched-progress cache — never synced, never reported anywhere. All
+other network activity on the page is YouTube's own — exactly as it would be
 without the extension installed.
 
 ## Permissions

@@ -4,8 +4,8 @@
 // keep them in sync.
 const SETTINGS_KEY = "settings";
 const DEFAULT_SETTINGS = { masterEnabled: true };
-// The seven switches (Phase 1). Six hides ON, startOnSubscriptions OFF — an
-// absent field reads as its default, so this equals LearnTube 1.0 exactly.
+// The eight switches. The six hides + showFeed ON, startOnSubscriptions OFF —
+// an absent field reads as its default, so this equals LearnTube 1.0 exactly.
 const DEFAULT_TOGGLES = {
   hideShorts: true,
   hideWatchSuggestions: true,
