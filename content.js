@@ -22,6 +22,12 @@ let reworkEnabled = false;
 
 function apply(enabled) {
   reworkEnabled = !!enabled;
+  // Session S: the route stamp is OURS, so it lives and dies with the master
+  // switch (master-off = plain YouTube, no data-ytr-* left on <html>). Synced
+  // here, in the same synchronous block as the class, so the class can never be
+  // on for a frame without its gate. (Declaration-hoisted — defined at §Session
+  // S near the top.)
+  syncRouteStamp();
   document.documentElement.classList.toggle("yt-rework", reworkEnabled);
 }
 
@@ -164,6 +170,47 @@ function redirectShorts() {
 window.addEventListener("yt-rework:locationchange", redirectShorts);
 window.addEventListener("popstate", redirectShorts);
 window.addEventListener("yt-navigate-finish", redirectShorts);
+
+// --- Session S: the route stamp — /results is native from the first paint -----
+// Owner decree (v1.2.1, hardened here): the search results page is 100%
+// YouTube's own. The JS side is gated by onSearchRoute(); the CSS side needs
+// the same gate and CSS cannot read location — so <html> carries
+// data-ytr-route="search" while (and ONLY while) we are on /results, and every
+// doc-wide rule that could match a search row is written
+// `html…:not([data-ytr-route="search"])` (§8a, §8b, §17).
+//
+// WHAT MAKES AN SPA HOP INTO SEARCH NATIVE FROM ITS FIRST FRAME: the patched
+// pushState/replaceState above. YouTube routes through the History API, so our
+// yt-rework:locationchange fires SYNCHRONOUSLY inside the pushState call —
+// location.pathname is already "/results" and the stamp lands before the new
+// page renders a single row. (yt-navigate-start is NOT that guarantee: it fires
+// BEFORE the History API updates, so the pathname it sees is still the old one.
+// It is not listened for here.) yt-navigate-finish and popstate are the
+// belt-and-braces for a hop we somehow missed, and — just as important — the
+// attribute is REMOVED the moment we leave, so every other surface gets its
+// rules back intact.
+//
+// The stamp is OURS, so it obeys the master switch: apply() syncs it in the
+// same block as the .yt-rework class, and master-off leaves plain YouTube with
+// no data-ytr-* on <html>. Nothing paints under our rules before apply() runs,
+// because our rules all hang off that class.
+//
+// ACCEPTED CONSEQUENCE of the decree: blocked channels and Shorts shelves DO
+// appear in search results. That is the trade the owner chose — search is
+// native, and native means all of it.
+function onSearchRoute() {
+  return location.pathname === "/results";
+}
+
+function syncRouteStamp() {
+  const el = document.documentElement;
+  if (reworkEnabled && onSearchRoute())
+    el.setAttribute("data-ytr-route", "search");
+  else el.removeAttribute("data-ytr-route");
+}
+window.addEventListener("yt-rework:locationchange", syncRouteStamp);
+window.addEventListener("popstate", syncRouteStamp);
+window.addEventListener("yt-navigate-finish", syncRouteStamp);
 
 // --- Learning home shell (injected UI) ---------------------------------------
 // The one thing CSS can't do besides routing: CREATE new DOM. Step 3 hid
@@ -497,6 +544,33 @@ function playlistVideoDurationFor(renderer) {
   return parseDurationToSeconds(label) !== null ? label : null;
 }
 
+// --- Session S: the row's ABSOLUTE position in the playlist -------------------
+// The bug this kills: Next/Previous/Up next stepping to the wrong lecture.
+// writePlaylistProgress keeps PRIOR order and APPENDS anything new, which is
+// only "playlist order" when every scrape starts at row 1. It doesn't: the
+// Session-Q hydration sees just the first ~15 rows, and the watch-page side
+// panel is virtualised around the CURRENT video. Open lecture 40 first and the
+// stored list becomes [1..15, 35..50, 16..34] — permanently scrambled, and 7→8
+// then lands anywhere.
+// Both playlist layouts render the row's real 1-based index in an #index
+// element — but only ONE of them is canonical. The watch-side panel
+// (ytd-playlist-panel-video-renderer) RE-NUMBERS itself when the user turns
+// shuffle on: its #index then reads 1,2,3… in shuffled order. Harvesting those
+// would store a shuffle as the course's real order and durably re-sort the
+// record — the exact scrambling this field exists to prevent, made permanent.
+// So `order` is read from the dedicated /playlist page's rows ONLY
+// (ytd-playlist-video-renderer, whose numbering is the playlist itself); the
+// other canonical source is the SSR payload in playlistVideosFromData. A watch-
+// page scrape therefore contributes progress but never a position, and the
+// merge's field-preserving rule keeps whatever order was already stored.
+// Fail-quiet: an unreadable index stores no field (never a guessed position).
+function playlistVideoOrderFor(renderer) {
+  if (renderer.tagName !== "YTD-PLAYLIST-VIDEO-RENDERER") return null;
+  const el = renderer.querySelector("#index");
+  const n = parseInt((el && el.textContent ? el.textContent : "").trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 // Field-level equality for two video lists, EXCLUDING updatedAt (which always
 // differs). Lets writePlaylistProgress skip an identical re-write.
 function sameProgressVideos(a, b) {
@@ -509,7 +583,8 @@ function sameProgressVideos(a, b) {
       !!x.watched !== !!y.watched ||
       x.ratio !== y.ratio ||
       (x.title || "") !== (y.title || "") ||
-      (x.duration || "") !== (y.duration || "")
+      (x.duration || "") !== (y.duration || "") ||
+      (x.order || 0) !== (y.order || 0) // Session S: an order-only fix must write
     )
       return false;
   }
@@ -525,7 +600,7 @@ function writePlaylistProgress(listId, freshVideos, title) {
     const prevRec = progress[listId] || {};
     const prev = Array.isArray(prevRec.videos) ? prevRec.videos : [];
     const freshById = new Map(freshVideos.map((v) => [v.id, v]));
-    const merged = [];
+    let merged = [];
     const used = new Set();
     // Keep prior order; refresh each from the new scrape if re-seen.
     // Field-preserving (Step 19): fresh watched/ratio always win, but a tick
@@ -554,6 +629,9 @@ function writePlaylistProgress(listId, freshVideos, title) {
         // false — an explicit un-tick must be durable across re-scrapes), the
         // same field-preserving rule as title/duration above.
         if (!("done" in v) && "done" in p) v.done = p.done;
+        // Session S: same field-preserving rule for the playlist position — a
+        // tick that couldn't read the #index keeps the stored one.
+        if (!v.order && p.order) v.order = p.order;
         merged.push(v);
       } else {
         merged.push(p);
@@ -564,6 +642,29 @@ function writePlaylistProgress(listId, freshVideos, title) {
     freshVideos.forEach((f) => {
       if (!used.has(f.id)) merged.push(f);
     });
+    // Session S: restore TRUE playlist order. Appending kept insertion order,
+    // which is only the course's order when every scrape started at row 1 — a
+    // virtualised watch-side panel or the Session-Q SSR prefix breaks that and
+    // Next/Previous/Up next then step through a scrambled list.
+    // PARTIAL-TOLERANT: a row whose video was deleted or made private can never
+    // be re-scraped, so "sort only when EVERY row has an order" would disable
+    // the heal on that record forever. Instead, rows that HAVE an order sort by
+    // it, and an order-less row rides along immediately behind the ordered row
+    // it currently follows (leading order-less rows stay at the front). Stable
+    // by construction — the original index is the tiebreak — so nothing is ever
+    // "wrongly moved": an order-less row only ever travels with its neighbour.
+    // Records with no order anywhere are untouched and self-heal the next time
+    // their /playlist page is opened.
+    if (merged.length > 1 && merged.some((v) => typeof v.order === "number")) {
+      let anchor = 0; // < any real 1-based order, so leading strays sort first
+      merged = merged
+        .map((v, i) => {
+          if (typeof v.order === "number") anchor = v.order;
+          return { v, key: anchor, i };
+        })
+        .sort((a, b) => a.key - b.key || a.i - b.i)
+        .map((x) => x.v);
+    }
     // Keep a human-readable title once we scrape one, so the Learning home can
     // show real playlist names instead of raw "PL…" ids. Never blank a known
     // title (a tick that missed the header keeps the prior one).
@@ -719,6 +820,11 @@ function scrapePlaylistPage() {
     if (vTitle) video.title = vTitle;
     const vDuration = playlistVideoDurationFor(r);
     if (vDuration) video.duration = vDuration;
+    // Session S: the row's real 1-based playlist position, so the merge can
+    // restore true course order however partial this scrape is. Canonical rows
+    // only (see playlistVideoOrderFor) — the watch-side panel contributes none.
+    const vOrder = playlistVideoOrderFor(r);
+    if (vOrder) video.order = vOrder;
     videos.push(video);
   });
   if (videos.length === 0) return;
@@ -732,6 +838,7 @@ function scrapePlaylistPage() {
 // nav channels firing per navigation share ONE loop (see makeBoundedRetry).
 const scrapePlaylistPageWithRetry = makeBoundedRetry(
   () => {
+    if (onSearchRoute()) return true; // the decree: no LearnTube work on search
     if (!currentListId()) return true; // not on a playlist -> nothing to do
     scrapePlaylistPage();
     return false; // keep ticking to capture late/lazy-loaded rows
@@ -978,6 +1085,10 @@ function playlistVideosFromData(data) {
         : videoFromPlaylistRenderer(row.value);
     if (!v || seen.has(v.id)) return; // de-dupe, keep first (playlist order)
     seen.add(v.id);
+    // Session S: the SSR payload is the playlist read from the TOP, so document
+    // order here IS absolute order — 1-based, matching the #index the DOM scrape
+    // reads. (Only the first ~15 rows ship; those 15 are rows 1..15.)
+    v.order = videos.length + 1;
     videos.push(v);
   });
   return videos;
@@ -1169,9 +1280,7 @@ function listIdsMissingScrape() {
 // the next hard load re-queues it.
 const BACKFILL_DEFER_MS = 3000;
 const BACKFILL_DEFER_MAX = 40; // ~2 min CONSECUTIVE on /results -> give up
-function onSearchRoute() {
-  return location.pathname === "/results";
-}
+// (onSearchRoute lives with the route stamp near the top — one search gate.)
 // Run fn when the main thread is free-ish. The timeout keeps it a deferral
 // rather than a maybe — but it is a scheduling hint, not a guarantee: fn is
 // queued as a task once the 2s timeout expires, and under continuous long tasks
@@ -2575,6 +2684,10 @@ function decorateSubscriptions() {
 // makes re-runs cheap no-ops on already-stamped rows.
 const decorateSubscriptionsWithRetry = makeBoundedRetry(
   () => {
+    // Session S: YouTube keeps the previous ytd-browse in the document (hidden)
+    // while /results is showing, so this pass could still walk hundreds of rows
+    // there. On search we do nothing at all — the next navigation re-fires it.
+    if (onSearchRoute()) return true;
     if (!subsBrowse()) {
       // Left Subscriptions (or never on it): tear down injected inbox chrome so
       // the header / VIP filter / open menu can't leak to the new page.
@@ -2608,14 +2721,12 @@ window.addEventListener("yt-navigate-finish", decorateSubscriptionsWithRetry);
 // and every §14 restyle. Search stayed slow under it and native search is the
 // product decision: /results renders YouTube's own cards, at YouTube's own speed.
 //
-// Exactly two LearnTube behaviours still reach /results, and BOTH ride the
-// nav-driven reapplyBlockedSweep() cadence below — no observer, no retry loop:
-//   • blocked-channel rows keep their data-ytr-blocked stamp (CSS §17 hides)
-//   • Shorts sections keep their data-ytr-shorts-section stamp (CSS §14b collapses)
-// searchRoot() survives only as the scope for those two passes.
-function searchRoot() {
-  return document.querySelector("ytd-search");
-}
+// Session S finishes the job: the last touchpoints are gone too. LearnTube now
+// makes ZERO DOM mutations on /results — no block stamp, no Shorts-section
+// stamp, no searchRoot(), and no injected row inside YouTube's own ⋮ menu — and
+// its doc-wide CSS is gated off by the route stamp (data-ytr-route="search").
+// Accepted, by decree: blocked channels and Shorts shelves appear in search
+// results, and the ⋮ menu there offers no Block.
 
 // --- K3: re-decorate rows YouTube appends on scroll --------------------------
 // decorateHome runs only on nav-bounded retries that settle ~1s after the feed
@@ -2683,57 +2794,6 @@ function parseDurationToSeconds(text) {
   let secs = 0;
   for (const p of parts) secs = secs * 60 + p;
   return secs;
-}
-
-// Session N (perf): stamp data-ytr-shorts-section on the search containers that
-// hold a Shorts shelf, so CSS section 14b can collapse them with a plain
-// attribute match instead of a :has() whose subject is the whole result list.
-// Session O: this is one of the two survivors of the search-code strip — it is
-// now called from restampBlocked() on the nav-driven reapplyBlockedSweep()
-// cadence, NOT from a decorate pass or an observer.
-// (§14b carries the full why; §8a's comment already had the rule — never make a
-// large, constantly-mutating container a :has() subject — and 14b was breaking
-// it on the one page that streams hardest.)
-//
-// Faithful to the four selectors it replaces, which is why the tag test differs
-// by shelf kind: a reel shelf collapsed BOTH its ytd-item-section-renderer and
-// its ytd-shelf-renderer, a Shorts rich-shelf only the item section. (One
-// deliberate superset: ytm-reel-shelf-renderer also counts as a reel for the
-// shelf-renderer wrapper — the old CSS only paired ytd- there, but the mobile
-// tag can't appear in a desktop wrapper anyway.) Walk up
-// from the (rare) shelf tags rather than scanning down from every section, so
-// the pass costs one flat query for tags that are almost never present.
-// TOGGLES (never one-shot): YouTube re-uses these section nodes across queries,
-// so a section that no longer holds a Shorts shelf must lose the stamp or the
-// next search would render a hole.
-const SHORTS_SECTION_FLAG = "data-ytr-shorts-section";
-const SHORTS_SHELF_SELECTOR =
-  "ytd-reel-shelf-renderer, ytm-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts]";
-
-function stampShortsSections(root) {
-  const want = new Set();
-  root.querySelectorAll(SHORTS_SHELF_SELECTOR).forEach((shelf) => {
-    // A reel shelf also collapsed its ytd-shelf-renderer wrapper; the Shorts
-    // rich-shelf never did (it ships no such wrapper) — keep that asymmetry.
-    const isReel = shelf.tagName !== "YTD-RICH-SHELF-RENDERER";
-    for (let el = shelf.parentElement; el && el !== root; el = el.parentElement) {
-      const tag = el.tagName;
-      if (
-        tag === "YTD-ITEM-SECTION-RENDERER" ||
-        (isReel && tag === "YTD-SHELF-RENDERER")
-      )
-        want.add(el);
-    }
-  });
-  root.querySelectorAll("[" + SHORTS_SECTION_FLAG + "]").forEach((el) => {
-    if (!want.has(el)) el.removeAttribute(SHORTS_SECTION_FLAG); // re-used section
-  });
-  want.forEach((el) => {
-    // Guarded: this sweep re-runs every 400ms, and re-setting an attribute to
-    // the same value still costs a mutation record + style invalidation.
-    if (!el.hasAttribute(SHORTS_SECTION_FLAG))
-      el.setAttribute(SHORTS_SECTION_FLAG, "1");
-  });
 }
 
 // --- Phase 2: Peek — the algorithm on request (display-only) ------------------
@@ -2843,6 +2903,12 @@ function decorateHome() {
 
 const decorateHomeWithRetry = makeBoundedRetry(
   () => {
+    // Session S: same as the Subscriptions pass — the hidden home browse
+    // survives a navigation to /results, and nothing of ours may run there.
+    if (onSearchRoute()) {
+      homeDecorateObserver.disconnect();
+      return true;
+    }
     if (!homeBrowse()) {
       homeDecorateObserver.disconnect(); // K3: off home -> stop watching
       return true; // removeLearningHome resets Peek
@@ -2907,22 +2973,17 @@ function blockCreator(key) {
 // YouTube tab's blockedChanged onChanged diff -> restampBlocked() reflects it
 // live. Kept as one path, not two, so there's no orphaned helper to drift.)
 
-// A search result's channel key — the subsRowChannelKey selector chain applied
-// to a ytd-video-renderer, resolved through normalizeChannelKey (@handle / UC… /
-// legacy). Fail-quiet: null -> not block-trackable.
-function searchRowChannelKey(row) {
-  // Session P: routed through blockRowChannelKey so a lockup search row (whose
-  // channel link can be absolute) resolves the SAME key the injected Block row
-  // is built from — a block must hide exactly the rows it was offered on.
-  return blockRowChannelKey(row);
-}
-
-// Re-stamp data-ytr-blocked wherever recommendations render (search results +
-// home rows) from the live blockedCache. Called after a block/unblock and from
-// the blockedChanged onChanged diff — CSS hides the stamped rows.
-// Session O: this is ALSO the only remaining stamp pass on /results — search
-// has no decorate pass and no observer any more — so the Shorts-section
-// collapse stamp (§14b) rides along here on the same cadence.
+// Re-stamp data-ytr-blocked wherever recommendations render (home rows, the
+// watch sidebar, grid shelves) from the live blockedCache. Called after a
+// block/unblock and from the blockedChanged onChanged diff — CSS hides the
+// stamped rows.
+// Session S: /results is NOT one of those surfaces any more. This pass was the
+// last thing LearnTube ran on search — a document-wide querySelectorAll plus a
+// channel-key resolve per row, twelve times per navigation, over a result list
+// that streams in. It now early-returns there: zero queries, zero mutations,
+// zero stamps on search. (Rows stamped BEFORE navigating into search keep their
+// attribute; §17 is gated off by the route stamp, so it is inert — un-stamping
+// them would itself be the mutation pass we are removing.)
 // Never a Block row, never a block stamp — whatever tag the row is rendered as.
 // v1.1 spelled the playlist rule as "one tag we omit" (ytd-playlist-video-
 // renderer). Current builds render PLAYLIST rows as yt-lockup-view-model too
@@ -2939,33 +3000,11 @@ const BLOCK_CONTEXT_EXCLUDE_SELECTOR = [
 ].join(",");
 
 function restampBlocked() {
+  if (onSearchRoute()) return; // the decree: search is native, we touch nothing
   // Gate the stamp on the master switch: with the rework off a stray sweep tick
   // (or a cross-tab onChanged) must CLEAR data-ytr-blocked, never re-add it —
   // master-off is plain YouTube, no leftover data-ytr-* attribute.
   const on = reworkEnabled;
-  const sr = searchRoot();
-  if (sr) {
-    // Session P: current builds render some/all search results as
-    // yt-lockup-view-model instead of ytd-video-renderer. The native ⋮ now
-    // offers Block on those rows, so "offered" only means something if the
-    // stamp reaches them too (CSS §17 hides both tags under ytd-search).
-    sr.querySelectorAll(
-      "ytd-video-renderer, ytd-channel-renderer, yt-lockup-view-model"
-    ).forEach(
-      (row) => {
-        const ck = searchRowChannelKey(row);
-        row.toggleAttribute("data-ytr-blocked", on && !!(ck && blockedCache[ck]));
-      }
-    );
-    // Survivor B: the §14b Shorts-section collapse stamp. Toggles (never
-    // one-shot) so a section YouTube re-uses for a Shorts-free query loses it.
-    // Master off -> clear, same rule as the block stamp above.
-    if (on) stampShortsSections(sr);
-    else
-      sr.querySelectorAll("[" + SHORTS_SECTION_FLAG + "]").forEach((el) =>
-        el.removeAttribute(SHORTS_SECTION_FLAG)
-      );
-  }
   const hb = homeBrowse();
   if (hb) {
     hb.querySelectorAll("ytd-rich-item-renderer").forEach((row) => {
@@ -3019,15 +3058,23 @@ function restampBlocked() {
 // does NOT settle early like the decorate retries). Cheap + idempotent;
 // display-only, never reorders. Runs off-page as harmless no-ops.
 //
-// ponytail: this ~4.8s nav-driven cadence is now the ONLY thing stamping
-// /results (Session O removed the search observer + retry so search runs at
-// native speed). Ceiling: a blocked channel's rows — or a Shorts shelf — that
+// Session S: it never runs on /results at all (see the guard below) — search is
+// native. Ceiling on the surfaces it DOES cover: a blocked channel's rows that
 // YouTube appends as a scroll CONTINUATION more than ~5s after the navigation
-// will not be stamped until the next navigation. Accepted: the first screenful
-// (which is what anyone actually sees) is covered, and the alternative is the
-// MutationObserver on the search subtree that made the page unusable.
+// are not stamped until the next navigation. Accepted: the first screenful
+// (which is what anyone actually sees) is covered.
 let blockedSweepTimer = null;
 function reapplyBlockedSweep() {
+  // Session S: on /results the sweep does not even start its interval — a
+  // 400ms×12 cadence over a streaming result list was the "the page loads a
+  // lot" cost. Any cadence already running is stopped on the way in.
+  if (onSearchRoute()) {
+    if (blockedSweepTimer) {
+      clearInterval(blockedSweepTimer);
+      blockedSweepTimer = null;
+    }
+    return;
+  }
   restampBlocked();
   if (blockedSweepTimer) clearInterval(blockedSweepTimer);
   let ticks = 0;
@@ -3076,6 +3123,11 @@ window.addEventListener("yt-navigate-finish", reapplyBlockedSweep);
 // Clicking the row calls blockCreator() — the SAME synced settings.blockedCreators
 // path the v1.1 chip used, so the popup's Blocked list and its ✕ unblock are
 // untouched.
+//
+// Session S narrows the contract by one route: NOT on /results. Both (1) and (3)
+// early-return there, so on search YouTube's ⋮ menu is byte-for-byte its own —
+// the decree again, and the last DOM write LearnTube had left on that page.
+// Blocking from anywhere else still works exactly as before.
 
 // Session P: the pipeline above was written against ONE menu generation — the
 // Polymer `tp-yt-iron-dropdown > ytd-menu-popup-renderer` dropdown. Current
@@ -3204,6 +3256,21 @@ function blockRowChannelKey(row) {
 }
 
 function rememberMenuTrigger(e) {
+  // Session S: on /results we arm nothing. Blocking from search is now a dead
+  // affordance (restampBlocked early-returns and §17 is gated off by the route
+  // stamp), so a Block row there would promise something it cannot deliver —
+  // and this listener plus the injection were the LAST LearnTube DOM writes on
+  // search. Clearing the record here also means a menu opened on /results can
+  // never inherit a row armed before the navigation. removeNativeBlockItem()
+  // also evicts a stale row left in the SHARED dropdown by a menu dismissed
+  // without a click (e.g. Escape) before navigating here — removing our OWN
+  // node is the accepted cleanup exception on /results.
+  if (onSearchRoute()) {
+    removeNativeBlockItem();
+    lastMenuRow = null;
+    lastMenuAt = 0;
+    return;
+  }
   const t = e.target;
   if (!t || !t.closest) return;
   // Our OWN injected row lives in the popup, not in a video row — leaving early
@@ -3543,6 +3610,15 @@ function injectNativeBlockItem() {
 // The one guarded entry point: the observer and the post-click timers both go
 // through it, so an injection failure can never surface as a broken native menu.
 function tryInjectNativeBlockItem() {
+  // Session S: search is native, all of it — including YouTube's own ⋮ menu.
+  // The one gate that covers every caller (the popup observer, the three
+  // post-click belt timers and the master-on rewire). removeNativeBlockItem()
+  // evicts a stale row left in the shared dropdown from before the navigation
+  // here — removing our OWN node is the accepted cleanup exception on /results.
+  if (onSearchRoute()) {
+    removeNativeBlockItem();
+    return;
+  }
   try {
     injectNativeBlockItem();
   } catch (err) {
@@ -4218,76 +4294,95 @@ function resolveCourseContext() {
   return null;
 }
 
-// Session R: the strip's two neighbours in ONE walk — the row before and the
-// row after the current video, in the very same topic→playlist→video scrape
-// order lecturePositionInCourse counts in and upcomingLectures lists (one
-// ordering source for the whole strip — never a second one). Both are purely
-// POSITIONAL by owner decree: 7→8→9 on Next, 9→8 on Previous, watched or not.
-// (The §4 deterministic "first non-watched" still drives the Library Continue
-// row and the Course Resume button via topicProgress — those surfaces are
-// unchanged; only the strip is positional.) Crosses playlist boundaries exactly
-// as the position count does, carrying that row's own list id. Either side is
-// null at the course edge — and BOTH are null when the current video isn't in
-// the scraped lists (un-scraped module), where "before/after" is undefined —
-// and the caller then renders no pill at all (no disabled ghosts in the strip).
-function courseAdjacentLectures(ctx) {
-  const cur = currentWatchVideoId();
-  const none = { prev: null, next: null };
-  if (!cur) return none;
+// --- The strip's positional walk (Session R, finished in Session S) ----------
+// Purely POSITIONAL by owner decree: 7→8→9 on Next, 9→8 on Previous, watched or
+// not, and the Up next list is the same walk from the same index. Either side
+// is null at the course edge (no disabled ghosts in the strip), and BOTH are
+// null when the current video isn't in the scraped lists, where "before/after"
+// is undefined. Crosses playlist boundaries inside the topic exactly as the
+// position count does, carrying that row's own list id — no cross-TOPIC hop,
+// ever. (The §4 deterministic "first non-watched" still drives the Library
+// Continue row and the Course Resume button via topicProgress — that is their
+// whole point, and they are untouched here.)
+//
+// Session S: ONE walk, ONE index resolution, for all three strip surfaces —
+// the position label, the Previous/Next pills and the Up next list. Three
+// separate walks (each with its own findIndex) is exactly how they drifted
+// apart. courseRows() is topic → playlist → video in stored order, which is now
+// the playlist's REAL order (writePlaylistProgress sorts by the scraped
+// `order`), not insertion order.
+//
+// TITLELESS ROWS ARE NOT IN THE WALK. "Real titles or nothing" is the strip's
+// standing rule (a "Lecture N" placeholder is forbidden), so the Up next list
+// always dropped them — and a row the walk's own list refuses to show must not
+// be a step the pills take either, or the first Up-next entry stops being the
+// Next pill's target. Filtering ONCE, here, is what keeps the position label,
+// the pills and the list counting the same rows: Next simply walks outward to
+// the nearest titled lecture. (A row is titleless only until a scrape reads its
+// title; the merge never blanks a known one.)
+function courseRows(ctx) {
   const rows = [];
   const pls = Array.isArray(ctx.topic.playlists) ? ctx.topic.playlists : [];
   pls.forEach((pl) => {
     const rec = progressCache[pl.id];
     const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
-    vids.forEach((v) => rows.push({ videoId: v.id, listId: pl.id }));
+    vids.forEach((v) => {
+      if (v.title) rows.push({ video: v, listId: pl.id });
+    });
   });
-  const i = rows.findIndex((r) => r.videoId === cur);
-  if (i < 0) return none;
-  return { prev: rows[i - 1] || null, next: rows[i + 1] || null };
+  return rows;
+}
+
+// Where the current video sits in that walk. A video can legitimately appear in
+// TWO of a topic's playlists (a course and its "highlights" list, a re-used
+// intro); matching on videoId ALONE then resolves the FIRST copy and the pills
+// step through the wrong module. The URL's ?list= says which copy the user is
+// actually watching, so match BOTH when it is there, and fall back to the
+// videoId alone when the lecture was opened without a list. -1 => not in the
+// scraped lists, and every caller then renders nothing rather than a guess.
+function courseIndexOf(rows) {
+  const cur = currentWatchVideoId();
+  if (!cur) return -1;
+  const list = currentListId();
+  if (list) {
+    const exact = rows.findIndex(
+      (r) => r.video.id === cur && r.listId === list
+    );
+    if (exact >= 0) return exact;
+  }
+  return rows.findIndex((r) => r.video.id === cur);
+}
+
+function courseAdjacentLectures(ctx) {
+  const rows = courseRows(ctx);
+  const i = courseIndexOf(rows);
+  if (i < 0) return { prev: null, next: null };
+  const at = (n) =>
+    rows[n] ? { videoId: rows[n].video.id, listId: rows[n].listId } : null;
+  return { prev: at(i - 1), next: at(i + 1) };
 }
 
 // The current lecture's honest position across the course: 1-based index +
-// total, in scrape order over the topic's playlists (the same order
-// topicProgress counts in). Null when the current video isn't in the scraped
+// total, in the same walk. Null when the current video isn't in the scraped
 // lists (un-scraped module) — the label is then omitted, never fabricated.
 function lecturePositionInCourse(ctx) {
-  const cur = currentWatchVideoId();
-  if (!cur) return null;
-  let total = 0;
-  let pos = null;
-  const pls = Array.isArray(ctx.topic.playlists) ? ctx.topic.playlists : [];
-  pls.forEach((pl) => {
-    const rec = progressCache[pl.id];
-    const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
-    vids.forEach((v) => {
-      total += 1;
-      if (pos === null && v.id === cur) pos = total;
-    });
-  });
-  return pos !== null ? { n: pos, total } : null;
+  const rows = courseRows(ctx);
+  const i = courseIndexOf(rows);
+  return i < 0 ? null : { n: i + 1, total: rows.length };
 }
 
-// B1 (Session G): the lectures AFTER the current video in course scrape order
-// (the same topic→playlist→video walk every other surface makes), read from
-// progressCache. Real titles or nothing: a video the scrape has no title for
-// is SKIPPED, never given a fabricated label. The current video must itself
-// be in the scraped lists — otherwise "after" is undefined and the caller
-// renders no pill. Display-only: reads the cache, never reorders anything.
+// B1 (Session G): the lectures AFTER the current one, in course order — the
+// same walk and the same index the Next pill uses, so the first row of the Up
+// next list IS courseAdjacentLectures().next. Purely positional: watched or
+// not, done or not, it lists what comes next. Session S: the "real titles or
+// nothing" filter that used to live HERE (and only here — which is exactly how
+// this list and the Next pill could disagree) now lives in courseRows, for
+// every consumer at once. Display-only: reads the cache, never reorders.
 function upcomingLectures(ctx) {
-  const cur = currentWatchVideoId();
-  if (!cur) return [];
-  const out = [];
-  let seen = false;
-  const pls = Array.isArray(ctx.topic.playlists) ? ctx.topic.playlists : [];
-  pls.forEach((pl) => {
-    const rec = progressCache[pl.id];
-    const vids = rec && Array.isArray(rec.videos) ? rec.videos : [];
-    vids.forEach((v) => {
-      if (seen && v.title) out.push({ video: v, listId: pl.id });
-      if (v.id === cur) seen = true;
-    });
-  });
-  return out;
+  const rows = courseRows(ctx);
+  const i = courseIndexOf(rows);
+  if (i < 0) return [];
+  return rows.slice(i + 1);
 }
 
 // --- The room stamp (the data-ytr-vip pattern) --------------------------------
@@ -5001,8 +5096,8 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // Decorate Subscriptions if we hard-loaded straight onto /feed/subscriptions
   // (no-op elsewhere; bounded retry handles late hydration + lazy rows).
   decorateSubscriptionsWithRetry();
-  // (Session O: nothing to decorate on /results — search is native. The
-  // reapplyBlockedSweep() at the end of this seed carries its two stamps.)
+  // (Session O/S: nothing at all runs on /results — search is native, and the
+  // sweep below early-returns there.)
   // Phase 2/3: the home decorate pass — stamps blocked rows on the native feed
   // (S6 off) and drives the Peek reveal; no-op when the Library is shown + not
   // peeking.
@@ -5143,18 +5238,19 @@ chrome.storage.onChanged.addListener((changes, area) => {
         setVipFilter(false);
         setPeek(false);
         // Clear the remembered-view stamp too (setPeek only drops data-ytr-peek)
-        // so master-off leaves no data-ytr-* on <html>.
+        // so master-off leaves no data-ytr-* on <html>. (data-ytr-route is not
+        // listed here on purpose: apply() above already dropped it, and re-adds
+        // it on master-on — one owner for that attribute, not two.)
         document.documentElement.removeAttribute("data-ytr-peek-view");
         // Master-off is plain YouTube: strip every remaining data-ytr-* element
-        // stamp (block/chan/vid/read + the Subscriptions flags + the Shorts
-        // section collapse) so nothing is left behind. The decorate passes
-        // early-return while off and wouldn't otherwise clear these; all are
-        // re-applied on master-on. (Session O: the search-only stamps —
-        // short-clip / search / shorts-chip — are gone with the search code.)
+        // stamp (block/chan/vid/read + the Subscriptions flags) so nothing is
+        // left behind. The decorate passes early-return while off and wouldn't
+        // otherwise clear these; all are re-applied on master-on. (Session O:
+        // the search-only stamps are gone with the search code; Session S took
+        // the last two — block + shorts-section — off /results as well.)
         const STAMPS = [
           "data-ytr-blocked", "data-ytr-chan", "data-ytr-vid", "data-ytr-read",
           "data-ytr-mailrow", "data-ytr-star", "data-ytr-archived",
-          "data-ytr-shorts-section",
         ];
         document
           .querySelectorAll(STAMPS.map((a) => "[" + a + "]").join(","))
@@ -5179,8 +5275,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
       renderLearningHome();
       decorateSubscriptionsWithRetry();
       decorateHomeWithRetry();
-      // Session O: master back ON re-seeds the two /results stamps (blocked
-      // rows + the §14b Shorts-section collapse) — search has no decorate pass.
+      // Master back ON re-seeds the block stamps on the surfaces that have no
+      // decorate pass of their own (watch sidebar, grid shelves). No-op on
+      // /results by decree.
       reapplyBlockedSweep();
       roomTickWithRetry();
       refreshSubsReadState();

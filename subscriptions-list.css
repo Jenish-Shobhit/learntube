@@ -438,6 +438,16 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[dat
    redirect (CSS can't change URLs) is Step 3 (JS); this step only hides
    the Shorts surfaces. If a region stops hiding, inspect it and update the
    tag/id below — YouTube renames these periodically.
+
+   Session S — THE SEARCH GATE: "site-wide" now stops at /results. Every rule
+   here that can match a search RESULT row (8a shelves, 8b tiles, 8d rich
+   sections) carries :not([data-ytr-route="search"]) — content.js stamps that
+   attribute on <html> at document_start and on every SPA navigation, so search
+   is native from the first paint and gets its rules back the instant you
+   leave. Accepted consequence: Shorts shelves and Shorts tiles DO appear in
+   search results. 8c (the left guide) and 8e-8g (watch/player) are deliberately
+   NOT gated — they are site chrome / other routes, not the results list, and
+   gating them would make the sidebar flicker as you navigate.
    ===================================================================== */
 
 /* 8a. Shorts — horizontal shelves (the "Shorts" titled rows on home, search
@@ -450,11 +460,11 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[dat
    (grid-shelf-view-model) is shared with non-Shorts grids, so it is gated by a
    TIGHT :has() on the shorts lockup it contains — a rare subject, so cheap.
    Selectors mirror the maintained uBlock "hide-yt-shorts" cosmetic list. */
-html.yt-rework:not([data-ytr-show-shorts]) ytd-reel-shelf-renderer,
-html.yt-rework:not([data-ytr-show-shorts]) ytm-reel-shelf-renderer,
-html.yt-rework:not([data-ytr-show-shorts]) ytd-rich-shelf-renderer[is-shorts],
-html.yt-rework:not([data-ytr-show-shorts]) ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
-html.yt-rework:not([data-ytr-show-shorts]) grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2) {
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-reel-shelf-renderer,
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytm-reel-shelf-renderer,
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-rich-shelf-renderer[is-shorts],
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2) {
   display: none !important;
 }
 
@@ -464,12 +474,12 @@ html.yt-rework:not([data-ytr-show-shorts]) grid-shelf-view-model:has(ytm-shorts-
    section wrapper, so style invalidation stays local and cheap as YouTube
    lazy-loads more results. Hiding the whole renderer (not just the lockup)
    avoids leaving an empty gap. */
-html.yt-rework:not([data-ytr-show-shorts]) ytd-video-renderer:has(a[href^="/shorts/"]),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-grid-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-rich-item-renderer:has(ytm-shorts-lockup-view-model),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-rich-item-renderer:has(a[href^="/shorts/"]),
-html.yt-rework:not([data-ytr-show-shorts]) ytd-reel-item-renderer {
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-video-renderer:has(a[href^="/shorts/"]),
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-grid-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]),
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-rich-item-renderer:has(ytm-shorts-lockup-view-model),
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-rich-item-renderer:has(a[href^="/shorts/"]),
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-reel-item-renderer {
   display: none !important;
 }
 
@@ -486,8 +496,8 @@ html.yt-rework:not([data-ytr-show-shorts]) ytd-mini-guide-entry-renderer[aria-la
 }
 
 /* 8d. Shorts — channel-page "Shorts" tab + any remaining shorts rich sections */
-html.yt-rework:not([data-ytr-show-shorts]) yt-tab-shape[tab-title="Shorts"],
-html.yt-rework:not([data-ytr-show-shorts]) ytd-rich-section-renderer:has([is-shorts]) {
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) yt-tab-shape[tab-title="Shorts"],
+html.yt-rework:not([data-ytr-route="search"]):not([data-ytr-show-shorts]) ytd-rich-section-renderer:has([is-shorts]) {
   display: none !important;
 }
 
@@ -1815,38 +1825,20 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[dat
    This section used to reshape the search page: hide the Shorts filter
    chip (14a), collapse emptied Shorts sections (14b), run the "Lectures"
    lens over sub-threshold clips (14c) and style the injected
-   #ytr-search-toolbar pill + hint (14d). ALL OF IT IS GONE except 14b.
+   #ytr-search-toolbar pill + hint (14d). ALL OF IT IS GONE.
 
    Why: search stayed slow under LearnTube even after the Session-N :has()
    fix, and the product call is that search must simply be YouTube's — so
    LearnTube adds NO layout, NO restyle, NO filter and NO injected chrome
-   to /results. Native cards, native speed. The two behaviours that still
-   reach search are deliberate survivors and are both plain attribute
-   matches stamped on content.js's nav-driven reapplyBlockedSweep()
-   cadence (no MutationObserver on the search subtree, ever):
-     • 14b below — the Shorts-section collapse.
-     • §17 — blocked-channel rows leave search.
+   to /results. Native cards, native speed.
+
+   Session S closes the last door: the two survivors (the 14b Shorts-section
+   collapse and §17's blocked rows) are gone from search too, along with the
+   content.js stamp passes that fed them. /results now receives ZERO LearnTube
+   DOM mutations and ZERO LearnTube CSS — enforced by the route stamp
+   data-ytr-route="search" on <html>, which every doc-wide hiding rule in this
+   file negates on. Section 14 is kept as this tombstone so nobody re-adds it.
    ===================================================================== */
-
-/* 14b. Reflow collapse. §8a hides the reel shelf itself, but its enclosing
-   search SECTION keeps its header + vertical spacing, leaving a gap. Collapse
-   the whole section when it contains a Shorts shelf.
-
-   PERF: this must NEVER go back to being a `:has()` whose SUBJECT is
-   ytd-item-section-renderer / ytd-shelf-renderer — that container IS the search
-   result list, and a descendant :has() on it makes Blink re-scan the whole
-   subtree on every insertion while results stream in (the original "/results
-   sits on the spinner for seconds" bug). content.js stamps
-   data-ytr-shorts-section on the very same containers instead, so this is a
-   plain attribute match with zero invalidation cost. Trade-off: the collapse
-   lands on the next sweep tick (400ms cadence) rather than synchronously — the
-   thumbnails are ALREADY hidden by §8a, so the worst case is a stray "Shorts"
-   heading + gap, never a flash of actual Shorts. Stamp gone (selector drift,
-   master off) => gap returns, nothing breaks. */
-html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-item-section-renderer[data-ytr-shorts-section],
-html.yt-rework:not([data-ytr-show-shorts]) ytd-search ytd-shelf-renderer[data-ytr-shorts-section] {
-  display: none !important;
-}
 
 /* =====================================================================
    15. The Lecture (Step 23) — centered player + the focus strip
@@ -2283,16 +2275,19 @@ html.yt-rework[data-ytr-peek][data-ytr-peek-view="list"] ytd-browse[page-subtype
    content.js stamps data-ytr-blocked on rows whose channel is in the synced
    settings.blockedCreators map. Display-only: pure display:none, NEVER
    reorders. B2 — a blocked creator leaves EVERYWHERE recommendations render:
-   search results, both Peek views, and the native home feed (S6 off). NOT
-   Subscriptions (you chose those — and §6j hides the native ⋮ there, so §17b's
-   injected Block row is unreachable on the inbox by construction). Master
+   both Peek views, and the native home feed (S6 off). NOT search (Session S —
+   /results is native), and NOT Subscriptions (you chose those — and §6j hides
+   the native ⋮ there, so §17b's injected Block row is unreachable on the inbox
+   by construction). Master
    is the gate: switch off => class gone => nothing matches => blocked rows
    return with the rest of native YouTube.
    ===================================================================== */
-html.yt-rework ytd-search ytd-video-renderer[data-ytr-blocked],
-html.yt-rework ytd-search ytd-channel-renderer[data-ytr-blocked] {
-  display: none !important;
-}
+/* Session S: the two ytd-search rules that used to live here are DELETED, and
+   the un-scoped rule below carries :not([data-ytr-route="search"]). Search is
+   100% native by decree — a blocked channel therefore DOES show up in search
+   results (and only there). The gate also covers a node YouTube recycled into
+   the search page still wearing a stamp from another surface: the attribute may
+   linger, but on /results nothing matches it. */
 html.yt-rework ytd-browse[page-subtype="home"] ytd-rich-item-renderer[data-ytr-blocked] {
   display: none !important;
 }
@@ -2308,9 +2303,9 @@ html.yt-rework ytd-browse[page-subtype="home"] ytd-rich-item-renderer[data-ytr-b
    them. The playlist rule is upheld in content.js instead of here
    (BLOCK_CONTEXT_EXCLUDE_SELECTOR): a lockup inside a playlist listing or
    the watch queue is never stamped, so this rule can never hide a lecture. */
-html.yt-rework ytd-compact-video-renderer[data-ytr-blocked],
-html.yt-rework ytd-grid-video-renderer[data-ytr-blocked],
-html.yt-rework yt-lockup-view-model[data-ytr-blocked] {
+html.yt-rework:not([data-ytr-route="search"]) ytd-compact-video-renderer[data-ytr-blocked],
+html.yt-rework:not([data-ytr-route="search"]) ytd-grid-video-renderer[data-ytr-blocked],
+html.yt-rework:not([data-ytr-route="search"]) yt-lockup-view-model[data-ytr-blocked] {
   display: none !important;
 }
 

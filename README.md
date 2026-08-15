@@ -48,25 +48,25 @@ switch, with a per-surface switch for any piece you want handed back.
   view (your choice is remembered). It's display-only; peeking never feeds the
   algorithm.
 - **Block a channel for good.** Open a video's ordinary **⋮** menu — YouTube's
-  own, on a search result, a home or Peek card, or the watch page's sidebar —
-  and pick **🚫 Block this channel**. That creator's videos then leave
-  everywhere recommendations render: search, both Peek views, the native home
-  feed, the watch-page sidebar and grid shelves. Blocks sync across your
-  devices; unblock from the popup's Blocked list. Blocking is context-aware, so
-  it never hides rows inside a playlist or course, on the watch-page queue, on
+  own, on a home or Peek card, or the watch page's sidebar — and pick
+  **🚫 Block this channel**. That creator's videos then leave everywhere
+  recommendations render: both Peek views, the native home feed, the
+  watch-page sidebar and grid shelves. Blocks sync across your devices;
+  unblock from the popup's Blocked list. Blocking is context-aware, so it
+  never hides rows inside a playlist or course, on the watch-page queue, on
   your own Subscriptions feed, or on a channel's own page — those are always
-  left alone.
+  left alone, and the search results page is left alone too (see below).
 - **Fewer distractions everywhere.** Watch-page "up next" suggestions, comments,
   and end-screen cards are removed — on a lecture inside one of your topics, an
   **Up next ▾** pill brings back just the coming lectures' titles on demand,
   and a **← Previous lecture** pill sits alongside it so you can step back
   without leaving the focus strip — and the masthead is reclaimed down to
   [logo · search · account].
-- **Search is left alone.** LearnTube doesn't touch the results page at all —
-  no lens, no toolbar, no restyle — so you get YouTube's own search, at
-  YouTube's own speed. The only two things that carry over are the site-wide
-  Shorts hiding and your blocked channels, both quietly stamped onto the rows
-  YouTube renders.
+- **Search is left alone.** LearnTube doesn't touch the results page at
+  all — no lens, no toolbar, no restyle, and no hiding — so you get YouTube's
+  own search, at YouTube's own speed. Shorts shelves still show there and
+  blocked channels can still appear there; blocking and Shorts-hiding apply
+  everywhere else.
 
 Everything is display-only: LearnTube **never reorders your feed or touches
 YouTube's recommendation algorithm.** It only hides, restyles, and adds its own
