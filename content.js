@@ -4801,8 +4801,10 @@ function onSpeedClick(e) {
 // defends a key-chosen speed identically.
 //
 // Is this element one the user is typing into? Checked on the composed source
-// AND on document.activeElement, because a keydown inside a shadow root is
-// retargeted to its host by the time it reaches the document.
+// AND on document.activeElement, because a keydown inside an OPEN shadow root is
+// retargeted to its host by the time it reaches the document. (A field inside a
+// CLOSED root is invisible to both checks — nothing on today's YouTube uses one,
+// and there is no API that would let us see it if it did.)
 function isSpeedTypingTarget(el) {
   if (!el || el.nodeType !== 1) return false;
   const tag = el.tagName;
@@ -4821,8 +4823,23 @@ function isSpeedTypingTarget(el) {
 // Auto-repeat is deliberately allowed: holding + is a stream of real user
 // choices, and each one re-opening the put-back window is correct (the window is
 // a wall-clock deadline, not a timer that restarts work).
+//
+// AltGr is NOT a modifier here, it is part of the key face: on QWERTZ/AZERTY the
+// default [ and ] ARE AltGr presses, so bailing on e.altKey would have shipped
+// two dead defaults to every such keyboard. AltGr sets altKey everywhere and
+// ctrlKey as well on Windows, so when getModifierState("AltGraph") is true both
+// of those are the composition itself and the press goes through; plain
+// ctrl / meta / alt still bail.
+function speedKeyModifiersOk(e) {
+  if (e.metaKey) return false;
+  const altGraph =
+    typeof e.getModifierState === "function" && e.getModifierState("AltGraph");
+  if (altGraph) return true;
+  return !e.ctrlKey && !e.altKey;
+}
+
 function onSpeedKeyDown(e) {
-  if (!e || e.ctrlKey || e.metaKey || e.altKey) return; // modifier = not ours
+  if (!e || !speedKeyModifiersOk(e)) return; // modifier = not ours
   if (e.isComposing || e.keyCode === 229) return; // mid-IME composition
   const up = e.key === speedKeyUp;
   const down = e.key === speedKeyDown;

@@ -46,6 +46,18 @@ function keyFace(key) {
   return key === " " ? "Space" : key;
 }
 
+// Which modifier states let a press count as a key the user meant. Meta never
+// does; ctrl / alt never do EXCEPT as AltGr, which is not a modifier but part of
+// the character (AltGr sets altKey everywhere, and ctrlKey too on Windows).
+// Duplicated in content.js — keep the two in sync.
+function speedKeyModifiersOk(e) {
+  if (e.metaKey) return false;
+  const altGraph =
+    typeof e.getModifierState === "function" && e.getModifierState("AltGraph");
+  if (altGraph) return true;
+  return !e.ctrlKey && !e.altKey;
+}
+
 const master = document.getElementById("master-toggle");
 const toggleInputs = Array.prototype.slice.call(
   document.querySelectorAll("input[data-toggle]")
@@ -199,7 +211,18 @@ document.addEventListener(
       key === "AltGraph"
     )
       return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return; // content.js ignores these
+    // Same modifier rule as content.js, AltGr included: on QWERTZ/AZERTY the
+    // bracket keys ARE AltGr presses, and a box that refused them could never
+    // bind the very defaults those keyboards ship with. (Kept in sync there.)
+    if (!speedKeyModifiersOk(e)) return;
+    // Keys we refuse to bind, because binding them takes something away with no
+    // way back from inside the page: Tab is keyboard navigation (a Tab bound
+    // here is swallowed on every watch page), and F1-F24 are the browser's.
+    // Stay armed, exactly like the modifier refusal — the user just presses
+    // another key. Space and YouTube's own player keys stay bindable: taking
+    // one of those over is a deliberate choice, and suppress-on-fire is the
+    // designed behaviour.
+    if (key === "Tab" || /^F([1-9]|1[0-9]|2[0-4])$/.test(key)) return;
     if (key === "Escape") {
       stopCapture();
       return;
