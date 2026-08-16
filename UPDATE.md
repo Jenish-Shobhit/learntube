@@ -32,7 +32,10 @@ on a channel's own page) plus unblock from the popup's Blocked list, adding a pl
 or the playlist page's **＋ Add to LearnTube** button and checking it hydrates title/lectures right
 away, Subscriptions inbox (stars / VIP / overflow), a course view (including a manual lecture tick /
 un-tick), a topic watch page (centered player + focus strip, **Up next ▾** and **← Previous lecture**),
-the `/shorts/` redirect, and **master OFF restores native YouTube**.
+the `/shorts/` redirect, the speed control (on a plain video AND a course lecture: **+**
+to 4×, **−** to 0.25×, click the readout to reset to 1×, confirm the speed survives going
+Library → another video, then flip the popup switch off and confirm the control disappears),
+and **master OFF restores native YouTube**.
 
 ## 5. Upload the update
 Developer Dashboard → **LearnTube** → **Package** → **Upload new package** → fill anything new in the

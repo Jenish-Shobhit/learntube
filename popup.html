@@ -79,6 +79,25 @@
   }
   input:checked + .track { background: #30d158; }
   input:checked + .track::before { transform: translateX(18px); }
+  /* Patch 2: the one non-switch setting — the speed step. Sized to sit on the
+     switch's line without stealing its weight. */
+  .select {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: 0 0 auto;
+    padding: 5px 26px 5px 10px;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    background: #1a1a1a
+      url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
+      no-repeat right 9px center;
+    color: #f1f1f1;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .select:focus-visible { outline: 2px solid #30d158; outline-offset: 1px; }
   /* Blocked list */
   .blocked-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -154,6 +173,19 @@
       <span class="label">Start on Subscriptions</span>
       <label class="switch"><input type="checkbox" data-toggle="startOnSubscriptions" /><span class="track"></span></label>
     </div>
+    <div class="row">
+      <span class="label">Speed buttons on videos</span>
+      <label class="switch"><input type="checkbox" data-toggle="speedButtons" /><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Speed step</span>
+      <select class="select" id="speed-step">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1">1×</option>
+      </select>
+    </div>
+    <p class="hint">The − and + buttons sit under the player on every video, and go up to 4×.</p>
   </div>
   <div class="panel">
     <div class="panel-title">Blocked</div>

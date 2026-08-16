@@ -62,6 +62,16 @@ switch, with a per-surface switch for any piece you want handed back.
   and a **← Previous lecture** pill sits alongside it so you can step back
   without leaving the focus strip — and the masthead is reclaimed down to
   [logo · search · account].
+- **A speed control on every watch page.** A **− speed +** pill sits by the
+  player — in the focus strip on a course lecture, standalone under the
+  player elsewhere — so you can nudge playback without hunting through
+  YouTube's own menu. **−** and **+** step by an amount you pick in the
+  popup (0.25×, 0.5×, or 1×), across a 0.25×–4× range that reaches beyond
+  YouTube's own 2× ceiling; click the readout to snap straight back to 1×.
+  Your chosen speed sticks for the session and follows you from video to
+  video. A popup switch, **Speed buttons on videos**, hides the control
+  entirely. (If YouTube itself resets the speed mid-video — rare — a press
+  of **+** or the readout reasserts yours.)
 - **Search is left alone.** LearnTube doesn't touch the results page at
   all — no lens, no toolbar, no restyle — so you get YouTube's own search, at
   YouTube's own speed. The one exception is the Shorts switch: when it's on,

@@ -2209,6 +2209,90 @@ html.yt-rework ytd-watch-flexy #yt-rework-focus-strip .ytr-lec-dur {
   }
 }
 
+/* 15c. Patch 2 (v1.2.7): the playback-speed control — "−  1.00×  +".
+   ONE widget with TWO homes: inside the focus strip's right cluster on a course
+   watch page, and inside its own #yt-rework-speed-bar (same slot at the top of
+   #below) on every other watch page. So the .ytr-speed rules below are scoped
+   to ytd-watch-flexy, not to either mount — the group looks identical in both.
+   It reads as ONE segmented pill (the §15b .ytr-pill recipe: outlined surface,
+   pill radius, lift shadow) divided by two hairlines, so it sits beside the
+   Previous / Next pills as a sibling rather than three loose buttons. */
+html.yt-rework ytd-watch-flexy #yt-rework-speed-bar {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  margin: var(--lt-space-3) 0 var(--lt-space-2) !important;
+  font-family: var(--lt-font) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+html.yt-rework ytd-watch-flexy .ytr-speed {
+  display: inline-flex !important;
+  align-items: stretch !important;
+  height: 32px !important; /* geometry: the §15b pill height, not a token */
+  flex-shrink: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid var(--lt-track) !important;
+  border-radius: var(--lt-radius-pill) !important;
+  background: var(--lt-surface) !important;
+  box-shadow: var(--lt-lift) !important; /* lit from above, never flat */
+  font-family: var(--lt-font) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+html.yt-rework ytd-watch-flexy .ytr-speed-btn,
+html.yt-rework ytd-watch-flexy .ytr-speed-now {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--lt-text-2) !important;
+  font-family: inherit !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--lt-track-tight) !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  transition: background var(--lt-dur-med) var(--lt-ease-std),
+    color var(--lt-dur-med) var(--lt-ease-std) !important;
+}
+/* The two steppers: square-ish ends, the glyph a touch larger than the number
+   so − and + stay hittable at 32px tall. */
+html.yt-rework ytd-watch-flexy .ytr-speed-btn {
+  width: 32px !important; /* geometry (square end caps), not a token */
+  padding: 0 !important;
+  font-size: var(--lt-fs-sm) !important;
+}
+/* The readout doubles as "back to normal speed" — fixed width so stepping
+   1.00× → 1.25× → 10 more presses never nudges the buttons sideways. */
+html.yt-rework ytd-watch-flexy .ytr-speed-now {
+  min-width: 62px !important; /* geometry: fits "1.25×" at 600 weight */
+  padding: 0 var(--lt-space-2) !important;
+  border-left: 1px solid var(--lt-hairline) !important;
+  border-right: 1px solid var(--lt-hairline) !important;
+  color: var(--lt-text) !important;
+  font-size: var(--lt-fs-xs) !important;
+}
+html.yt-rework ytd-watch-flexy .ytr-speed-btn:hover,
+html.yt-rework ytd-watch-flexy .ytr-speed-now:hover {
+  background: var(--lt-accent-soft) !important;
+  color: var(--lt-accent) !important;
+}
+html.yt-rework ytd-watch-flexy .ytr-speed-btn:focus-visible,
+html.yt-rework ytd-watch-flexy .ytr-speed-now:focus-visible {
+  outline: none !important;
+  box-shadow: var(--lt-focus-ring) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html.yt-rework ytd-watch-flexy .ytr-speed * {
+    transition: none !important;
+  }
+}
+
 /* =====================================================================
    16. Peek — List view (Phase 2; the algorithm, in a Subscriptions-style list)
    ---------------------------------------------------------------------

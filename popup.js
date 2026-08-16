@@ -15,12 +15,24 @@ const DEFAULT_TOGGLES = {
   replaceHome: true,
   showFeed: true, // the Library's "Show feed" (Peek) button — off = no button at all
   startOnSubscriptions: false,
+  speedButtons: true, // Patch 2: the "−  1.00×  +" control on every watch page
 };
+// Patch 2: how much one press of − / + moves the speed. A NUMBER, so it rides
+// settings.speedStep directly (like peekView), not settings.toggles. Anything
+// off this list reads as the default. Kept in sync with content.js.
+const SPEED_STEPS = [0.25, 0.5, 1];
+const DEFAULT_SPEED_STEP = 0.25;
+
+function readSpeedStep(settings) {
+  const n = settings && Number(settings.speedStep);
+  return SPEED_STEPS.indexOf(n) >= 0 ? n : DEFAULT_SPEED_STEP;
+}
 
 const master = document.getElementById("master-toggle");
 const toggleInputs = Array.prototype.slice.call(
   document.querySelectorAll("input[data-toggle]")
 );
+const speedStepSelect = document.getElementById("speed-step");
 const blockedList = document.getElementById("blocked-list");
 const blockedEmpty = document.getElementById("blocked-empty");
 
@@ -39,6 +51,7 @@ function renderFrom(settings) {
   toggleInputs.forEach((input) => {
     input.checked = t[input.dataset.toggle] !== false;
   });
+  speedStepSelect.value = String(readSpeedStep(settings));
   renderBlocked(settings.blockedCreators || {});
 }
 
@@ -82,6 +95,14 @@ toggleInputs.forEach((input) => {
       s.toggles = Object.assign({}, DEFAULT_TOGGLES, s.toggles || {});
       s.toggles[input.dataset.toggle] = input.checked;
     });
+  });
+});
+
+// Patch 2: the speed step — a number on the settings object, not a switch.
+speedStepSelect.addEventListener("change", () => {
+  const step = Number(speedStepSelect.value);
+  writeSettings((s) => {
+    s.speedStep = SPEED_STEPS.indexOf(step) >= 0 ? step : DEFAULT_SPEED_STEP;
   });
 });
 

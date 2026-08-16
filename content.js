@@ -55,6 +55,10 @@ const DEFAULT_TOGGLES = {
   replaceHome: true,
   showFeed: true, // the Library's "Show feed" (Peek) button — off = no button at all
   startOnSubscriptions: false,
+  // Patch 2 (v1.2.7): the "−  1.00×  +" speed control on EVERY watch page.
+  // Default ON — it replaces the old course-only speed pill, so leaving it out
+  // would silently remove a shipped affordance.
+  speedButtons: true,
 };
 
 // Live mirror, seeded from settings.toggles (merged over the defaults so every
@@ -4244,7 +4248,102 @@ window.addEventListener("yt-navigate-finish", markCurrentWatchRead);
 // structured view; the watch page stays focused on the video). No Data API:
 // watched-state is the Step-6 resume-bar scrape (storage.local.progress).
 const FOCUS_STRIP_ID = "yt-rework-focus-strip";
-const ROOM_SPEEDS = [1, 1.25, 1.5, 2];
+
+// --- Patch 2 (v1.2.7): the playback-speed control ----------------------------
+// Owner's ask: the speed control used to exist ONLY inside the course focus
+// strip (a pill that cycled 1 → 1.25 → 1.5 → 2). It is now "−  1.00×  +" on
+// EVERY /watch page, with a configurable step and a ceiling of 4× — past
+// YouTube's own menu cap of 2×, which is a limit of THEIR menu, not of the
+// media element (live-probed 2026-08-16: `video.playbackRate = 4` is accepted
+// and reads back 4 with no clamp).
+//
+// One builder (makeSpeedGroup) feeds two mounts, so the control is one widget
+// with one look: inside the strip's right cluster when a course strip exists,
+// and in its own #yt-rework-speed-bar (same slot at the top of #below, same
+// styling) on every other watch page. Never two at once — roomTick owns that.
+//
+// WHAT THE LIVE PROBES ESTABLISHED (2026-08-16), because the whole design below
+// follows from it:
+//  · The element accepts 4× and never clamps it.
+//  · But an element write is INVISIBLE to YouTube's own player controller —
+//    with the element at 4×, movie_player.getPlaybackRate() still reads 1. The
+//    controller therefore RE-ASSERTS its own rate on every media (re)load: SPA
+//    nav (~1.5-1.9s after, and slower on a cold load), ad end, quality switch,
+//    a seek after a stall. That API is main-world only; a content script in the
+//    isolated world cannot read or set it. The element and its events are all
+//    we have, so "put ours back after each media load" is the only mechanism
+//    available — hence the LOAD windows below rather than one nav stopwatch.
+//  · YouTube already persists the user's OWN (menu-chosen) speed across videos.
+//    So when the user reaches for the native menu we ADOPT their number and get
+//    out of the way; we only fight the controller's reset, never the user.
+const SPEED_BAR_ID = "yt-rework-speed-bar";
+const SPEED_MIN = 0.25;
+const SPEED_MAX = 4;
+const SPEED_STEPS = [0.25, 0.5, 1]; // the popup's choices
+const DEFAULT_SPEED_STEP = 0.25;
+// How long after landing on a fresh v= a rate change to something other than
+// our target is read as the controller re-asserting itself — a reset to put
+// back — rather than the user choosing. Sized off the measurement: the
+// re-assert lands ~1.5-1.9s after an SPA nav, later on a cold load.
+const SPEED_WINDOW_MS = 2500;
+// The same, keyed on a MEDIA LOAD (loadeddata / canplay: ad end, quality
+// switch, a seek after a stall). A controller re-assert rides the load itself,
+// so this window is deliberately tight — every extra millisecond is a
+// millisecond in which the user's own menu pick would be wrongly put back.
+const SPEED_LOAD_MS = 800;
+const SPEED_MAX_REAPPLIES = 6; // fuse: a bounded number of put-backs per window
+
+let speedStep = DEFAULT_SPEED_STEP; // mirror of settings.speedStep (synced)
+// THE SESSION RATE. Per document, never persisted (a 4× that outlived the tab
+// it was chosen in would be a trap) — but it SURVIVES leaving /watch, so a
+// detour to search or the Library and back keeps the speed the user chose.
+// It is hard-reset to 1× at exactly one moment: the transition into
+// switch-off / master-off (the owner-required "no orphan 4×").
+let speedTarget = 1;
+// Do WE own the rate the element is currently running at? Set when a write of
+// ours lands, cleared the moment the user's own menu is adopted (or on a
+// restore). Everything that puts the rate BACK to 1× is gated on this, so a
+// speed the user chose natively is never touched by us.
+let speedOwned = false;
+// Has the user chosen a speed THROUGH OUR CONTROL this session? Set only by a
+// press of − / + / the readout, cleared when their native menu is adopted and
+// on the hard disarm. This is the licence to DEFEND a rate at all: until they
+// press one of our buttons we have no opinion, so the controller applying the
+// speed YouTube remembered for them (measured: ~1.5s after a nav) is simply
+// adopted and shown — never fought. Defending the initial 1× would have forced
+// a 1× on a user whose own persisted speed was 2×, which nobody asked for.
+let speedChosen = false;
+// The exact value of our most recent write, so a ratechange can be matched to
+// it BY VALUE. A boolean "we are writing" flag swallowed YouTube's interleaved
+// write too and left the readout lying.
+let speedSelfValue = null;
+let speedSelfTimer = 0; // fallback clear, in case a write fires no ratechange
+let speedLoadUntil = 0; // end of the current put-back window
+let speedReapplies = 0; // put-backs used in this window (loop fuse)
+let speedVid = null; // the v= the target was last (re)applied for
+// Were we armed (master on + switch on + on /watch) last tick? The restore to
+// 1× is a ONE-SHOT on the armed→disarmed edge, never an every-tick write.
+let speedArmed = false;
+
+// settings.speedStep: a NUMBER off the fixed list (not a boolean, so it rides
+// the settings object directly like peekView, not settings.toggles). Anything
+// else — absent, stale, hand-edited — reads as the default.
+function readSpeedStep(settings) {
+  const n = settings && Number(settings.speedStep);
+  return SPEED_STEPS.indexOf(n) >= 0 ? n : DEFAULT_SPEED_STEP;
+}
+
+// Snap to 2dp and hold the rails. 0.25 and 1.0 steps both land on clean values;
+// the rounding only guards float drift (0.25 × 3 = 0.7500000000000001).
+//
+// The floor is Math.max's job ALONE. An early `n <= 0 -> 1` here made − jump
+// UPWARDS off the floor (0.25 − 0.25 = 0 → 1×), oscillate 1↔0.5 on the 0.5
+// step, and kill − outright on the 1.0 step. Only a non-number falls back to 1.
+function clampSpeed(rate) {
+  const n = Number(rate);
+  if (!isFinite(n)) return 1;
+  return Math.min(SPEED_MAX, Math.max(SPEED_MIN, Math.round(n * 100) / 100));
+}
 
 // B1 (Session G): the "Up next ▾" fold — session-only view state, collapsed by
 // default. A module let so roomTick's bounded-retry re-renders don't collapse
@@ -4256,10 +4355,16 @@ let upNextOpen = false;
 let upNextVid = null;
 
 // The <video> the player is using right now. Re-read each interaction (the
-// player can swap the element across SPA nav / ad breaks). First match is the
-// main player.
+// player can swap the element across SPA nav / ad breaks). The player's own
+// .html5-main-video class is asked for FIRST: "the first <video> in the
+// document" is only the player until YouTube ships a hover-preview element
+// ahead of it, and the speed engine gates every write on identity with this
+// function — a wrong answer would make it silently inert, not merely wrong.
 function roomVideoEl() {
-  return document.querySelector("video");
+  return (
+    document.querySelector("video.html5-main-video") ||
+    document.querySelector("video")
+  );
 }
 
 // The v= id of the current /watch page (id only — never a fabricated title).
@@ -4415,9 +4520,278 @@ function setRoomActive(on) {
   window.dispatchEvent(new Event("resize"));
 }
 
-// Speed pill label: "1×", "1.25×", … (an off-list native rate shows as-is).
+// Readout label: always two decimals ("1.00×", "1.25×", "4.00×") so the number
+// never changes width as it steps (the bar is tabular-nums; this keeps it from
+// jittering between 1× and 1.25×).
 function speedLabel(rate) {
-  return String(rate) + "×";
+  return clampSpeed(rate).toFixed(2) + "×";
+}
+
+// True when the control should be on screen AND owning the rate.
+function speedControlOn() {
+  return (
+    reworkEnabled &&
+    togglesCache.speedButtons !== false &&
+    location.pathname === "/watch"
+  );
+}
+
+// Write a rate to the live <video> (re-read every time — the player swaps the
+// element across SPA nav / ad breaks). Returns false when there is no video
+// yet, which tells the caller to keep the retry window open. speedSelfValue
+// records WHAT we wrote, so the ratechange handler can match the echo by value
+// (a bare "we are writing" flag also swallowed YouTube's interleaved write and
+// left the readout lying about the real rate). A timer clears it in case a
+// write fires no ratechange at all.
+function applySpeed(rate) {
+  const v = roomVideoEl();
+  if (!v) return false;
+  if (Math.abs(v.playbackRate - rate) < 1e-6) return true; // already there
+  speedSelfValue = rate;
+  clearTimeout(speedSelfTimer);
+  speedSelfTimer = setTimeout(() => {
+    speedSelfValue = null;
+  }, 600);
+  try {
+    v.playbackRate = rate;
+  } catch (_) {
+    speedSelfValue = null; // rejected (out of the UA's range) — stay honest
+    return false;
+  }
+  return true;
+}
+
+// Write the SESSION rate and take ownership of it. Ownership is what licenses
+// us to put the rate back to 1× later, so it is claimed narrowly: only when the
+// write actually MOVED the rate, and only away from 1×. If the element already
+// sits at our target — YouTube carrying the user's own menu choice forward, say
+// — we have changed nothing and own nothing, so switch-off leaves it alone.
+function applySpeedTarget() {
+  const v = roomVideoEl();
+  if (!v) return false;
+  const moved = Math.abs(v.playbackRate - speedTarget) >= 1e-6;
+  const ok = applySpeed(speedTarget);
+  if (ok && moved && speedTarget !== 1) speedOwned = true;
+  return ok;
+}
+
+// Repaint every mounted readout (both mounts share the class, and there is only
+// ever one of them live). The aria-label carries the live number too — a static
+// one would leave a screen reader with a button that never says its own value.
+function renderSpeedReadouts() {
+  const label = speedLabel(speedTarget);
+  document.querySelectorAll(".ytr-speed-now").forEach((b) => {
+    b.textContent = label;
+    b.setAttribute("aria-label", label + ", click for normal speed");
+  });
+}
+
+// Open a put-back window: for the next SPEED_WINDOW_MS, a rate change to
+// anything but our target is the player controller re-asserting itself.
+// Open a put-back window of `ms`. Never SHORTENS one already open (a canplay
+// 300ms into a nav must not cut the nav's longer window down to its own).
+function openSpeedWindow(ms) {
+  const until = Date.now() + ms;
+  if (until > speedLoadUntil) speedLoadUntil = until;
+  speedReapplies = 0;
+}
+
+// The user pressed − / + / the number. THIS is the only thing that gives us a
+// speed to defend.
+function setSpeed(rate) {
+  speedTarget = clampSpeed(rate);
+  speedChosen = true;
+  speedReapplies = 0;
+  if (!applySpeedTarget()) {
+    // No <video> yet (early on a hard load): open a window and let the room
+    // retry land it as soon as the player exists.
+    openSpeedWindow(SPEED_WINDOW_MS);
+    roomTickWithRetry();
+  }
+  renderSpeedReadouts();
+}
+
+// Somebody ELSE moved the rate. Three questions, in order:
+//
+//  1. Have we been given a speed to defend at all (speedChosen)? Until the user
+//     presses one of OUR buttons, no — the rate belongs to YouTube, which
+//     remembers the user's own menu choice across videos and re-applies it a
+//     beat after each nav. We adopt it and show it. (Defending the initial 1×
+//     here is exactly how a user with a persisted 2× got forced to 1×.)
+//  2. Are we inside a put-back window? Then the controller is re-asserting its
+//     own rate — it cannot see element writes — and ours goes back.
+//  3. Otherwise it is the user reaching for YouTube's native menu: adopt their
+//     number, hand ownership AND the licence back, and stop touching it (their
+//     choice then rides YouTube's own persistence to the next video).
+//
+// Loop-guards: (1) a change matching OUR last write by value is our own echo;
+// (2) a change already equal to the target is a no-op; (3) put-backs are fused
+// at SPEED_MAX_REAPPLIES per window; (4) when the control is off — switch or
+// master or off /watch — this handler touches NOTHING and returns, so a native
+// speed can never be adopted into state we would later "restore".
+function onSpeedRateChange(e) {
+  const v = e.target;
+  if (!v || v !== roomVideoEl()) return; // a shelf preview's <video> is not ours
+  const r = v.playbackRate;
+  if (speedSelfValue !== null && Math.abs(r - speedSelfValue) < 1e-6) {
+    speedSelfValue = null; // our own write, landed
+    clearTimeout(speedSelfTimer);
+    renderSpeedReadouts();
+    return;
+  }
+  if (!speedControlOn()) return; // off = hands off, entirely
+  if (Math.abs(r - speedTarget) < 1e-6) {
+    renderSpeedReadouts();
+    return;
+  }
+  if (
+    speedChosen &&
+    Date.now() < speedLoadUntil &&
+    speedReapplies < SPEED_MAX_REAPPLIES
+  ) {
+    speedReapplies++;
+    applySpeedTarget();
+    return;
+  }
+  // Adopt: either we have no chosen speed (the controller's own rate is the
+  // truth) or this is the user's native menu outside every window.
+  speedTarget = clampSpeed(r);
+  speedOwned = false;
+  speedChosen = false;
+  renderSpeedReadouts();
+}
+
+// Capture-phase on the document: `ratechange` doesn't bubble, and the <video>
+// is swapped by the player, so listening on the element is not durable.
+document.addEventListener("ratechange", onSpeedRateChange, true);
+
+// Every media (re)load is a moment the controller re-asserts its rate: the SPA
+// nav's new video, the end of an ad, a quality switch, a seek after a stall.
+// Keying the put-back on the load EVENT (not on a stopwatch started at nav) is
+// what covers the mid-video cases a wall-clock window would miss — and the
+// window it opens is the SHORT one, because a re-assert rides the load itself
+// while a user's menu pick can come at any time after it.
+function onSpeedMediaLoad(e) {
+  if (!e.target || e.target !== roomVideoEl()) return;
+  if (!speedControlOn()) return;
+  if (!speedChosen) return; // nothing of ours to defend — leave the rate alone
+  openSpeedWindow(SPEED_LOAD_MS);
+  applySpeedTarget();
+}
+document.addEventListener("loadeddata", onSpeedMediaLoad, true);
+document.addEventListener("canplay", onSpeedMediaLoad, true);
+
+// The armed→disarmed edge (off /watch, the switch off, master off). ONE write,
+// and only when the rate on the element is OURS — a speed the user chose in
+// YouTube's own menu is never yanked back to 1×. `hard` (switch/master off) is
+// the single moment the session rate and the licence to defend it are cleared;
+// leaving /watch keeps them, so a detour to search or the Library and back
+// resumes at the chosen speed.
+//
+// Returns true when the disarm SETTLED. Ownership is released only once the
+// restoring write actually lands: if there is no video to write to (the player
+// is gone, or a miniplayer element answers instead), we stay the owner and the
+// caller retries on its next tick — releasing early would strand a 3× element
+// with nothing left that is allowed to bring it back.
+function disarmSpeed(hard) {
+  let settled = true;
+  if (speedOwned) {
+    if (applySpeed(1)) speedOwned = false;
+    else settled = false;
+  }
+  speedLoadUntil = 0;
+  speedReapplies = 0;
+  speedVid = null;
+  if (hard) {
+    speedTarget = 1;
+    speedChosen = false;
+  }
+  return settled;
+}
+
+// The widget: − | readout | +. All three are real <button>s (the readout resets
+// to 1×); labels are static literals via textContent, no innerHTML anywhere.
+function makeSpeedGroup() {
+  const g = makeEl("div", { className: "ytr-speed" });
+  g.append(
+    makeEl("button", {
+      className: "ytr-speed-btn",
+      text: "−",
+      attrs: {
+        type: "button",
+        "data-speed-action": "down",
+        title: "Slower",
+        "aria-label": "Slower",
+      },
+    })
+  );
+  g.append(
+    makeEl("button", {
+      className: "ytr-speed-now",
+      text: speedLabel(speedTarget),
+      attrs: {
+        type: "button",
+        "data-speed-action": "reset",
+        title: "Back to normal speed",
+        // Kept live by renderSpeedReadouts — a screen reader must hear the
+        // current speed, not just "reset".
+        "aria-label": speedLabel(speedTarget) + ", click for normal speed",
+      },
+    })
+  );
+  g.append(
+    makeEl("button", {
+      className: "ytr-speed-btn",
+      text: "+",
+      attrs: {
+        type: "button",
+        "data-speed-action": "up",
+        title: "Faster",
+        "aria-label": "Faster",
+      },
+    })
+  );
+  return g;
+}
+
+// Shared delegated click: used by the standalone bar's own handler AND by the
+// strip's existing onRoomClick (one contract, one behaviour). Returns true when
+// it handled the event.
+function handleSpeedClick(e) {
+  const t = e.target;
+  if (!t || !t.closest) return false;
+  const btn = t.closest("[data-speed-action]");
+  if (!btn) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  const act = btn.getAttribute("data-speed-action");
+  if (act === "reset") setSpeed(1);
+  else setSpeed(speedTarget + (act === "up" ? speedStep : -speedStep));
+  return true;
+}
+
+function onSpeedClick(e) {
+  handleSpeedClick(e);
+}
+
+// The standalone mount — same slot as the focus strip (top of #below), used on
+// every watch page that has no course strip. Only ever mounted when the strip
+// is absent, so the two can never fight over #below's first child.
+function mountSpeedBar() {
+  if (document.getElementById(SPEED_BAR_ID)) return true; // idempotent
+  const host = focusStripMountTarget();
+  if (!host) return false;
+  const bar = makeEl("div");
+  bar.id = SPEED_BAR_ID;
+  bar.addEventListener("click", onSpeedClick, true);
+  bar.append(makeSpeedGroup());
+  host.insertBefore(bar, host.firstChild);
+  return true;
+}
+
+function removeSpeedBar() {
+  const el = document.getElementById(SPEED_BAR_ID);
+  if (el) el.remove();
 }
 
 function removeFocusStrip() {
@@ -4494,18 +4868,10 @@ function renderFocusStrip(ctx) {
   // lecture (Session O: a deep-link; absent on the first lecture) · Next
   // lecture (a deep-link; simply absent on the last lecture).
   const right = makeEl("div", { className: "ytr-fs-right" });
-  const v = roomVideoEl();
-  right.append(
-    makeEl("button", {
-      className: "ytr-pill",
-      text: speedLabel(v ? v.playbackRate : 1),
-      attrs: {
-        type: "button",
-        "data-room-action": "speed",
-        title: "Cycle playback speed (1× → 1.25 → 1.5 → 2×)",
-      },
-    })
-  );
+  // Patch 2: the old cycle pill is gone — the strip now carries the SAME
+  // "−  1.00×  +" group the rest of the watch pages get (one widget, one look),
+  // and it obeys the same switch.
+  if (togglesCache.speedButtons !== false) right.append(makeSpeedGroup());
   const upcoming = upcomingLectures(ctx);
   if (upcoming.length > 0) {
     right.append(
@@ -4574,6 +4940,10 @@ function onRoomClick(e) {
   const t = e.target;
   if (!t || !t.closest) return;
 
+  // Patch 2: the speed group lives inside the strip's right cluster here, and
+  // in its own bar elsewhere — one shared handler for both.
+  if (handleSpeedClick(e)) return;
+
   const back = t.closest("[data-room-back]");
   if (back) {
     const strip = document.getElementById(FOCUS_STRIP_ID);
@@ -4594,17 +4964,6 @@ function onRoomClick(e) {
     return;
   }
 
-  const btn = t.closest('[data-room-action="speed"]');
-  if (btn) {
-    e.preventDefault();
-    e.stopPropagation();
-    const v = roomVideoEl();
-    if (!v) return;
-    const idx = ROOM_SPEEDS.indexOf(v.playbackRate);
-    const next = ROOM_SPEEDS[(idx + 1) % ROOM_SPEEDS.length]; // off-list → 1×
-    v.playbackRate = next;
-    btn.textContent = speedLabel(next);
-  }
 }
 
 // One tick: clear the stamp + strip off /watch / master-off; stamp the room on
@@ -4616,18 +4975,66 @@ function roomTick() {
   if (!reworkEnabled) {
     setRoomActive(false);
     removeFocusStrip();
+    removeSpeedBar();
+    // Master off: the one-shot restore + the hard clear of the session rate,
+    // fired only on the armed→disarmed EDGE. (An every-tick applySpeed(1) here
+    // spent the whole retry window slamming a natively-chosen speed back down.)
+    // Stays armed if the restore couldn't land, so the next tick re-tries it.
+    if (speedArmed && disarmSpeed(true)) speedArmed = false;
     return true;
   }
-  setRoomActive(location.pathname === "/watch");
+  const onWatch = location.pathname === "/watch";
+  setRoomActive(onWatch);
+  const speedOn = togglesCache.speedButtons !== false;
+  if (!onWatch || !speedOn) {
+    if (!onWatch) removeFocusStrip();
+    removeSpeedBar();
+    // Switch off is a HARD disarm (the owner-required reset to 1×); merely
+    // leaving /watch is soft — the session rate survives the detour.
+    if (speedArmed && disarmSpeed(!speedOn)) speedArmed = false;
+    if (!onWatch) return true;
+  }
+
+  // Patch 2: the speed pass runs on EVERY watch page, course or not. A new v=
+  // opens a put-back window — the controller re-asserts its own rate as each
+  // video loads, and the session's chosen speed has to win it back (the retry's
+  // ticks plus the loadeddata/canplay listeners are what cover it).
+  const vid = currentWatchVideoId();
+  if (speedOn) {
+    if (!speedArmed || vid !== speedVid) {
+      speedArmed = true;
+      speedVid = vid;
+      openSpeedWindow(SPEED_WINDOW_MS);
+      // With nothing of ours chosen, the truth is whatever the player is doing:
+      // read it, so a bar mounting onto a video already running at the user's
+      // remembered 2× says 2.00× instead of lying with a default 1.00×. A read,
+      // never a write.
+      if (!speedChosen) {
+        const v = roomVideoEl();
+        if (v) speedTarget = clampSpeed(v.playbackRate);
+      }
+    }
+    // Only ever re-assert a speed the user actually chose through our control.
+    // Without that gate this line defended the default 1× and stamped it over
+    // the speed YouTube had remembered for them.
+    if (speedChosen && Date.now() < speedLoadUntil) applySpeedTarget();
+  }
+
   const ctx = resolveCourseContext();
   if (!ctx) {
     removeFocusStrip();
-    return true; // not in a topic -> centered player, no strip
+    // Not in a topic -> centered player, no strip, but still the speed control.
+    if (!speedOn) return true;
+    if (!mountSpeedBar()) return false; // #below not hydrated yet
+    renderSpeedReadouts();
+    // Keep ticking only while the put-back window is open.
+    return Date.now() >= speedLoadUntil;
   }
+  removeSpeedBar(); // on a course page the group rides INSIDE the strip
   // B1 (Session G): a NEW lecture page starts with the Up next list folded
   // (collapsed by default); the retry's repeat ticks for the SAME video keep
   // whatever the user chose (the module let is only reset on a vid change).
-  const vid = currentWatchVideoId();
+  // (`vid` is resolved once above, for the speed pass — same value, one read.)
   if (vid !== upNextVid) {
     upNextVid = vid;
     upNextOpen = false;
@@ -5163,6 +5570,9 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // Phase 2: seed the remembered Peek view (grid default) onto <html> — the list
   // restyle keys on it, but only matters once data-ytr-peek is also set.
   peekView = settings.peekView === "list" ? "list" : "grid";
+  // Patch 2: seed the speed STEP (a number on settings, not a switch). The rate
+  // itself is session state and always starts at 1×.
+  speedStep = readSpeedStep(settings);
   // Only stamp the remembered-view attr while the rework is on — a fresh load
   // with master OFF must stay plain YouTube (no data-ytr-* on <html>). The
   // master ON transition re-stamps it (see the masterChanged branch).
@@ -5324,6 +5734,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
       next.blockedCreators && typeof next.blockedCreators === "object"
         ? next.blockedCreators
         : {};
+    // Patch 2: the speed step is a plain mirror — the next − / + press uses it.
+    // Nothing on screen shows the step, so there is nothing to re-render.
+    speedStep = readSpeedStep(next);
     const nextView = next.peekView === "list" ? "list" : "grid";
     if (nextView !== peekView) {
       peekView = nextView;
@@ -5414,6 +5827,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       mountLearningHomeWithRetry();
       renderLearningHome();
       // S2 (hideWatchSuggestions) gates the centered player — only on /watch.
+      // Patch 2: the same tick mounts / tears down the speed control (and its
+      // teardown puts the rate back to 1×), so speedButtons rides this line too.
       if (location.pathname === "/watch") roomTickWithRetry();
       // S6-off native feed needs its blocked stamps; the surface itself moved.
       decorateHomeWithRetry();
