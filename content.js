@@ -31,7 +31,7 @@ function apply(enabled) {
   document.documentElement.classList.toggle("yt-rework", reworkEnabled);
 }
 
-// --- v1.1 "The Switchboard" — the eight switches, Peek, Block ----------------
+// --- v1.1 "The Switchboard" — the nine switches, Peek, Block -----------------
 // All durable state still rides the ONE synced `settings` object (zero new
 // top-level keys). Phase 1 adds `settings.toggles` (the switches); Phase 2
 // adds `settings.peekView` ("grid"|"list", the remembered Peek view); Phase 3
@@ -4981,7 +4981,7 @@ function roomTick() {
     // spent the whole retry window slamming a natively-chosen speed back down.)
     // Stays armed if the restore couldn't land, so the next tick re-tries it.
     if (speedArmed && disarmSpeed(true)) speedArmed = false;
-    return true;
+    return !speedArmed; // unsettled (still armed) -> keep ticking, not stop
   }
   const onWatch = location.pathname === "/watch";
   setRoomActive(onWatch);
@@ -4992,7 +4992,7 @@ function roomTick() {
     // Switch off is a HARD disarm (the owner-required reset to 1×); merely
     // leaving /watch is soft — the session rate survives the detour.
     if (speedArmed && disarmSpeed(!speedOn)) speedArmed = false;
-    if (!onWatch) return true;
+    if (!onWatch) return !speedArmed; // unsettled -> keep retrying, not stop
   }
 
   // Patch 2: the speed pass runs on EVERY watch page, course or not. A new v=
@@ -5829,7 +5829,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
       // S2 (hideWatchSuggestions) gates the centered player — only on /watch.
       // Patch 2: the same tick mounts / tears down the speed control (and its
       // teardown puts the rate back to 1×), so speedButtons rides this line too.
-      if (location.pathname === "/watch") roomTickWithRetry();
+      // Ungated (any page, not just /watch): a switch-off's teardown/hard-reset
+      // has to run wherever the toggle was flipped from — roomTick is a cheap
+      // no-op off /watch, but a still-armed speed (or a still-mounted strip)
+      // needs its disarm to fire immediately rather than waiting for a /watch
+      // return.
+      roomTickWithRetry();
       // S6-off native feed needs its blocked stamps; the surface itself moved.
       decorateHomeWithRetry();
     }

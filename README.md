@@ -16,14 +16,15 @@ switch, with a per-surface switch for any piece you want handed back.
 
 - **One master switch.** Click the toolbar icon to toggle the entire rework on
   or off. Off means plain, untouched YouTube — instantly.
-- **A switchboard of eight switches.** Under the master switch, the popup gives
+- **A switchboard of nine switches.** Under the master switch, the popup gives
   you a switch per distraction — **Hide Shorts**, **Hide watch suggestions**,
   **Hide comments**, **Hide end screens & cards**, **Simplify the top bar**,
-  **Replace Home with your Library**, **Show feed button**, and **Start on
-  Subscriptions**. Each hide hands that piece of YouTube back to native when you
-  flip it off; **Show feed button** and **Start on Subscriptions** switch off
+  **Replace Home with your Library**, **Show feed button**, **Start on
+  Subscriptions**, and **Speed buttons on videos**. Each hide hands that piece
+  of YouTube back to native when you flip it off; **Show feed button**,
+  **Start on Subscriptions**, and **Speed buttons on videos** switch off
   LearnTube's own additions instead. The defaults are the classic LearnTube 1.0
-  experience plus the feed button.
+  experience plus the feed button and the speed control.
 - **Shorts, gone.** Shorts shelves, tiles, and the sidebar entry are hidden
   site-wide, and any `/shorts/*` link is redirected to the normal player (Back
   won't bounce you into a Short). Flip **Hide Shorts** off and Shorts return.
@@ -61,7 +62,12 @@ switch, with a per-surface switch for any piece you want handed back.
   **Up next ▾** pill brings back just the coming lectures' titles on demand,
   and a **← Previous lecture** pill sits alongside it so you can step back
   without leaving the focus strip — and the masthead is reclaimed down to
-  [logo · search · account].
+  [logo · search · account]. Hiding the end wall also cancels the autonav
+  countdown behind it, via the player's own per-video Cancel button; if that
+  button can't be found by the end of a short retry window, LearnTube falls
+  back to switching off YouTube's own Autoplay setting instead — a persisted
+  YouTube preference, not a per-video action — so nothing plays itself
+  unannounced.
 - **A speed control on every watch page.** A **− speed +** pill sits by the
   player — in the focus strip on a course lecture, standalone under the
   player elsewhere — so you can nudge playback without hunting through
@@ -69,9 +75,12 @@ switch, with a per-surface switch for any piece you want handed back.
   popup (0.25×, 0.5×, or 1×), across a 0.25×–4× range that reaches beyond
   YouTube's own 2× ceiling; click the readout to snap straight back to 1×.
   Your chosen speed sticks for the session and follows you from video to
-  video. A popup switch, **Speed buttons on videos**, hides the control
-  entirely. (If YouTube itself resets the speed mid-video — rare — a press
-  of **+** or the readout reasserts yours.)
+  video, but only while you're on a watch page — leave it (back to search,
+  the Library, or another tab) and the playing video, including a
+  miniplayer, returns to normal speed until you're back on a watch page. A
+  popup switch, **Speed buttons on videos**, hides the control entirely.
+  (If YouTube itself resets the speed mid-video — rare — press **+** to set
+  it again.)
 - **Search is left alone.** LearnTube doesn't touch the results page at
   all — no lens, no toolbar, no restyle — so you get YouTube's own search, at
   YouTube's own speed. The one exception is the Shorts switch: when it's on,
