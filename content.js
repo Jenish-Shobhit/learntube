@@ -4346,12 +4346,41 @@ function readSpeedStep(settings) {
   return SPEED_STEPS.indexOf(n) >= 0 ? n : DEFAULT_SPEED_STEP;
 }
 
+// May this key face be a shortcut at all? ONE predicate, asked by the popup
+// before it writes a binding AND here before we honour one, so a value that
+// could never be bound through the UI can't arrive by hand-editing storage or a
+// sync from an older build either. Tab and Enter are the two that would cost the
+// page something with no way back from inside it — every keyboard activation of
+// a link or button goes through Enter, and Tab is focus navigation — and F1-F24
+// belong to the browser. (Escape / Backspace / Delete drive the capture box
+// itself, so the UI never offers them; nothing else is off limits.)
+// Kept in sync with popup.js.
+function isBindableKey(key) {
+  if (typeof key !== "string" || key.length < 1 || key.length > 20) return false;
+  if (key === "Tab" || key === "Enter") return false;
+  return !/^F([1-9]|1[0-9]|2[0-4])$/.test(key);
+}
+
 // settings.speedKeyDown / .speedKeyUp: a single e.key string, riding the
 // settings object like speedStep. Anything else — absent, empty, hand-edited to
-// a non-string, or an implausibly long name — reads as the default.
+// a non-string, an implausibly long name, or a key we refuse to bind — reads as
+// the default.
 function readSpeedKey(settings, field, fallback) {
   const k = settings && settings[field];
-  return typeof k === "string" && k.length > 0 && k.length <= 20 ? k : fallback;
+  return isBindableKey(k) ? k : fallback;
+}
+
+// Read BOTH hotkeys into their mirrors. One key can only mean one thing: the
+// keydown handler tests "up" first, so a duplicate would silently swallow
+// "down". The popup can't produce that state (it swaps instead), but corrupt or
+// hand-edited storage can — so down falls back to its default, and if that still
+// collides (the user bound UP to "[") down is left unbound rather than dead
+// weight pretending to be a shortcut.
+function syncSpeedKeys(settings) {
+  speedKeyUp = readSpeedKey(settings, "speedKeyUp", DEFAULT_SPEED_KEY_UP);
+  speedKeyDown = readSpeedKey(settings, "speedKeyDown", DEFAULT_SPEED_KEY_DOWN);
+  if (speedKeyDown === speedKeyUp) speedKeyDown = DEFAULT_SPEED_KEY_DOWN;
+  if (speedKeyDown === speedKeyUp) speedKeyDown = null;
 }
 
 // Snap to 2dp and hold the rails. 0.25 and 1.0 steps both land on clean values;
@@ -4628,6 +4657,15 @@ function setSpeed(rate) {
     // retry land it as soon as the player exists.
     openSpeedWindow(SPEED_WINDOW_MS);
     roomTickWithRetry();
+  } else {
+    // The write landed — but the controller cannot SEE an element write, so it
+    // may re-assert its own rate a beat later (a mid-video quality switch, an
+    // ad ending) with no load event we were already inside a window for.
+    // Without this the very next re-assert would be read as the user's native
+    // menu and adopted, quietly throwing away the speed they just chose. The
+    // short window is the right one: a re-assert follows immediately, while a
+    // real menu pick can come at any time after.
+    openSpeedWindow(SPEED_LOAD_MS);
   }
   renderSpeedReadouts();
 }
@@ -5655,8 +5693,7 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // itself is session state and always starts at 1×.
   speedStep = readSpeedStep(settings);
   // Patch 3: seed the two speed hotkeys (also plain settings fields).
-  speedKeyDown = readSpeedKey(settings, "speedKeyDown", DEFAULT_SPEED_KEY_DOWN);
-  speedKeyUp = readSpeedKey(settings, "speedKeyUp", DEFAULT_SPEED_KEY_UP);
+  syncSpeedKeys(settings);
   // Only stamp the remembered-view attr while the rework is on — a fresh load
   // with master OFF must stay plain YouTube (no data-ytr-* on <html>). The
   // master ON transition re-stamps it (see the masterChanged branch).
@@ -5823,8 +5860,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     speedStep = readSpeedStep(next);
     // Patch 3: the hotkeys are mirrors too — a rebind in the popup is live on
     // the next keystroke, with nothing on screen to re-render.
-    speedKeyDown = readSpeedKey(next, "speedKeyDown", DEFAULT_SPEED_KEY_DOWN);
-    speedKeyUp = readSpeedKey(next, "speedKeyUp", DEFAULT_SPEED_KEY_UP);
+    syncSpeedKeys(next);
     const nextView = next.peekView === "list" ? "list" : "grid";
     if (nextView !== peekView) {
       peekView = nextView;

@@ -20,7 +20,9 @@ unzip -l learntube-<version>.zip   # sanity check: exactly the 6 runtime items, 
 ```
 
 ## 4. Test the ZIP unpacked
-Unzip to a temp folder → **Load unpacked** → walk the key flows: master toggle, every per-surface
+Unzip to a temp folder → **Load unpacked** → **hard-reload every open YouTube tab** (a reloaded
+extension does not re-inject its CSS into tabs that are already open — a stale tab has burned a
+whole review round before) → walk the key flows: master toggle, every per-surface
 switch (each hide off hands that piece back to native YouTube; the feed-button and start-page
 switches turn off LearnTube's own additions), truly native search (zero LearnTube DOM/CSS on
 `/results` — results load at YouTube's own speed, blocked channels can still appear there, and the
@@ -30,7 +32,9 @@ feed** (Peek) in both List and Grid, **⊘ Block channel** from YouTube's own **
 Peek card / watch-page sidebar (and confirm it's a no-op inside a playlist, on Subscriptions, and
 on a channel's own page) plus unblock from the popup's Blocked list, adding a playlist via the popup
 or the playlist page's **＋ Add to LearnTube** button and checking it hydrates title/lectures right
-away, Subscriptions inbox (stars / VIP / overflow), a course view (including a manual lecture tick /
+away, Subscriptions inbox (stars / VIP / overflow, **in both light and dark mode**), in-feed ad rows
+(absent from the Subscriptions inbox and from Peek **List**, still there in Peek **Grid** and with the
+master off), a course view (including a manual lecture tick /
 un-tick), a topic watch page (centered player + focus strip, **Up next ▾** and **← Previous lecture**),
 the `/shorts/` redirect, the speed control (on a plain video AND a course lecture: **+**
 to 4×, **−** to 0.25×, click the readout to reset to 1×, confirm the speed survives going

@@ -115,12 +115,21 @@
     font-size: 12px;
     line-height: 1;
     cursor: pointer;
+    min-width: 0;
+    overflow: hidden;
   }
   .keycap .keycap-face {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     color: #ddd;
     min-width: 12px;
     text-align: center;
+    /* A long face (ArrowRight, MediaTrackNext) must clip like a blocked-channel
+       key does, not push the row past the panel. The full name is in the
+       aria-label either way. */
+    max-width: 74px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .keycap:hover { border-color: #4a4a4a; }
   .keycap:focus-visible { outline: 2px solid #30d158; outline-offset: 1px; }
@@ -128,7 +137,8 @@
     border-color: #30d158;
     color: #30d158;
   }
-  .keycap.is-capturing .keycap-face { color: #30d158; }
+  /* The armed prompt is prose, not a key face — let it have its full width. */
+  .keycap.is-capturing .keycap-face { color: #30d158; max-width: none; }
   /* Blocked list */
   .blocked-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -223,7 +233,7 @@
         <button class="keycap" type="button" id="speed-key-up">+<span class="keycap-face">]</span></button>
       </div>
     </div>
-    <p class="hint">The − and + buttons sit under the player on every video, and go up to 4×. The same two steps are on the keyboard: click a key box above, then press the key you want. Esc cancels and Backspace puts the default back, so those two can’t be bound.</p>
+    <p class="hint">The − and + buttons sit under the player on every video, and go up to 4×. The same two steps are on the keyboard: click a key box above, then press the key you want. Esc cancels and Backspace puts the default back, so those two can’t be bound — nor can Tab, Enter, or the function keys.</p>
   </div>
   <div class="panel">
     <div class="panel-title">Blocked</div>

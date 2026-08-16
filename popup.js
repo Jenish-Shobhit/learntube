@@ -35,9 +35,20 @@ function readSpeedStep(settings) {
 const DEFAULT_SPEED_KEY_DOWN = "[";
 const DEFAULT_SPEED_KEY_UP = "]";
 
+// May this key face be a shortcut at all? Asked before a binding is WRITTEN and
+// again when one is READ, so a value the UI would refuse can't slip in by hand-
+// editing storage. Tab and Enter would cost the watch page something with no way
+// back from inside it (focus navigation; every keyboard activation of a link or
+// button), and F1-F24 belong to the browser. Kept in sync with content.js.
+function isBindableKey(key) {
+  if (typeof key !== "string" || key.length < 1 || key.length > 20) return false;
+  if (key === "Tab" || key === "Enter") return false;
+  return !/^F([1-9]|1[0-9]|2[0-4])$/.test(key);
+}
+
 function readSpeedKey(settings, field, fallback) {
   const k = settings && settings[field];
-  return typeof k === "string" && k.length > 0 && k.length <= 20 ? k : fallback;
+  return isBindableKey(k) ? k : fallback;
 }
 
 // What to print on the cap. A space would be an invisible label, so it gets a
@@ -200,6 +211,9 @@ document.addEventListener(
     if (!capturingCap) return;
     e.preventDefault();
     e.stopPropagation();
+    // Mid-IME composition: the key is "Process", not a face anybody could press
+    // again. Wait it out (parity with content.js, which ignores the same thing).
+    if (e.isComposing || e.keyCode === 229) return;
     const key = e.key;
     // A bare modifier press is the user reaching for a combination — wait for
     // the key it modifies rather than binding "Shift".
@@ -215,14 +229,12 @@ document.addEventListener(
     // bracket keys ARE AltGr presses, and a box that refused them could never
     // bind the very defaults those keyboards ship with. (Kept in sync there.)
     if (!speedKeyModifiersOk(e)) return;
-    // Keys we refuse to bind, because binding them takes something away with no
-    // way back from inside the page: Tab is keyboard navigation (a Tab bound
-    // here is swallowed on every watch page), and F1-F24 are the browser's.
-    // Stay armed, exactly like the modifier refusal — the user just presses
-    // another key. Space and YouTube's own player keys stay bindable: taking
-    // one of those over is a deliberate choice, and suppress-on-fire is the
-    // designed behaviour.
-    if (key === "Tab" || /^F([1-9]|1[0-9]|2[0-4])$/.test(key)) return;
+    // A key we refuse to bind leaves the box ARMED, exactly like the modifier
+    // refusal — the user just presses another one. Space and YouTube's own
+    // player keys stay bindable: taking one of those over is a deliberate
+    // choice, and suppress-on-fire is the designed behaviour.
+    if (key !== "Escape" && key !== "Backspace" && key !== "Delete" && !isBindableKey(key))
+      return;
     if (key === "Escape") {
       stopCapture();
       return;

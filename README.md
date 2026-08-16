@@ -85,8 +85,9 @@ switch, with a per-surface switch for any piece you want handed back.
   popup switch, **Speed buttons on videos**, hides the control entirely.
   The same two steps are on the keyboard — **[** slower, **]** faster by
   default, both rebindable in the popup (click a key box, press the key you
-  want — Esc cancels and Backspace restores the default, so those two can't
-  themselves be bound, and neither can Tab or the function keys). The keys
+  want — Esc cancels and Backspace or Delete restores the default, so those
+  keys can't themselves be bound, and neither can Tab, Enter, or the function
+  keys). The keys
   only work on a watch page, never while you're typing in the search box,
   and go quiet with the switch off.
   (If YouTube itself resets the speed mid-video — rare — press **+** to set
