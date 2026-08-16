@@ -2001,6 +2001,28 @@ html.yt-rework[data-ytr-room] ytd-watch-flexy #primary {
   margin-right: auto !important;
   max-width: 1280px !important; /* geometry (standard player cap), not a token */
 }
+/* 15a-2. The ambient-mode bleed (Patch 3). YouTube's cinematic glow canvas
+   (#cinematics, ~1.5x the player width, centred on the player) is only ever
+   safe because the native #secondary column keeps the player narrow enough
+   that the glow still lands inside the window. Once 15a collapses that column
+   and centres a full-width player, the canvas spills ~220px past the right
+   edge and the page grows a horizontal scrollbar — measured live: <html>
+   scrollWidth 1678 vs clientWidth 1455 on both a plain and a course watch
+   page. Clip the bleed at the columns box, which spans the whole window (up
+   to its native max-width of 2284px; above that the ~1920px glow fits inside
+   it anyway), so nothing a reader can actually see is cut — only the
+   off-screen spill. `clip`, never `hidden`: for position:sticky it creates no
+   scroll container, so sticky elements inside #columns keep tracking the
+   page as normal; for the player's own fixed-position menus, #columns isn't
+   their containing block (no transform/filter/contain set on it), so `clip`
+   can't touch them either — both stay untouched. Caution: adding transform,
+   filter, or contain to #columns would make it the containing block for
+   those fixed descendants and change this.
+   Keyed on the master class alone (not the room stamp) so a watch page still
+   in the DOM mid-navigation, after the stamp drops, can't flash the bar. */
+html.yt-rework ytd-watch-flexy #columns {
+  overflow-x: clip !important;
+}
 
 /* 15b. The focus strip. B1 (Session G): now a COLUMN of [row, Up next list]
    — the .ytr-fs-row keeps the old one-quiet-row layout, and pressing the
