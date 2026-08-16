@@ -34,7 +34,8 @@ away, Subscriptions inbox (stars / VIP / overflow), a course view (including a m
 un-tick), a topic watch page (centered player + focus strip, **Up next ▾** and **← Previous lecture**),
 the `/shorts/` redirect, the speed control (on a plain video AND a course lecture: **+**
 to 4×, **−** to 0.25×, click the readout to reset to 1×, confirm the speed survives going
-Library → another video, then flip the popup switch off and confirm the control disappears),
+Library → another video, press **]** / **[** and confirm they step it too — and that typing them in
+the search box does not — then flip the popup switch off and confirm the control and the keys both go),
 and **master OFF restores native YouTube**.
 
 ## 5. Upload the update

@@ -29,11 +29,35 @@ function readSpeedStep(settings) {
   return SPEED_STEPS.indexOf(n) >= 0 ? n : DEFAULT_SPEED_STEP;
 }
 
+// Patch 3: the two speed hotkeys. Plain settings fields holding one e.key each
+// (the key FACE, so the box below can show back exactly what was pressed).
+// Kept in sync with content.js.
+const DEFAULT_SPEED_KEY_DOWN = "[";
+const DEFAULT_SPEED_KEY_UP = "]";
+
+function readSpeedKey(settings, field, fallback) {
+  const k = settings && settings[field];
+  return typeof k === "string" && k.length > 0 && k.length <= 20 ? k : fallback;
+}
+
+// What to print on the cap. A space would be an invisible label, so it gets a
+// name; everything else is shown as the layout produced it.
+function keyFace(key) {
+  return key === " " ? "Space" : key;
+}
+
 const master = document.getElementById("master-toggle");
 const toggleInputs = Array.prototype.slice.call(
   document.querySelectorAll("input[data-toggle]")
 );
 const speedStepSelect = document.getElementById("speed-step");
+// [element, settings field, default] for each capture box.
+const speedKeyCaps = [
+  [document.getElementById("speed-key-down"), "speedKeyDown", DEFAULT_SPEED_KEY_DOWN],
+  [document.getElementById("speed-key-up"), "speedKeyUp", DEFAULT_SPEED_KEY_UP],
+];
+// The box currently listening for a key, if any (only ever one).
+let capturingCap = null;
 const blockedList = document.getElementById("blocked-list");
 const blockedEmpty = document.getElementById("blocked-empty");
 
@@ -53,7 +77,45 @@ function renderFrom(settings) {
     input.checked = t[input.dataset.toggle] !== false;
   });
   speedStepSelect.value = String(readSpeedStep(settings));
+  renderSpeedKeys(settings);
   renderBlocked(settings.blockedCreators || {});
+}
+
+// Paint both caps from settings. A box mid-capture keeps its "press a key…"
+// prompt — a storage write from another surface must not steal the prompt away
+// from a user who is standing on the key.
+function renderSpeedKeys(settings) {
+  speedKeyCaps.forEach(([el, field, fallback]) => {
+    if (!el || el === capturingCap) return;
+    const face = el.querySelector(".keycap-face");
+    const key = readSpeedKey(settings, field, fallback);
+    face.textContent = keyFace(key); // key face -> textContent, never innerHTML
+    el.setAttribute(
+      "aria-label",
+      (field === "speedKeyUp" ? "Speed up" : "Speed down") +
+        " key: " +
+        keyFace(key) +
+        ". Click, then press a key to change it."
+    );
+  });
+}
+
+function startCapture(el) {
+  if (capturingCap && capturingCap !== el) stopCapture();
+  capturingCap = el;
+  el.classList.add("is-capturing");
+  el.querySelector(".keycap-face").textContent = "press a key…";
+}
+
+// Leave capture mode and repaint from storage (so a cancel restores the real
+// key, and a save shows the one just written).
+function stopCapture() {
+  const el = capturingCap;
+  capturingCap = null;
+  if (el) el.classList.remove("is-capturing");
+  chrome.storage.sync.get({ [SETTINGS_KEY]: DEFAULT_SETTINGS }, (res) => {
+    renderSpeedKeys(res[SETTINGS_KEY] || DEFAULT_SETTINGS);
+  });
 }
 
 // The Blocked list (Phase 3): each key as plain text + a ✕ that unblocks it.
@@ -105,6 +167,72 @@ speedStepSelect.addEventListener("change", () => {
   writeSettings((s) => {
     s.speedStep = SPEED_STEPS.indexOf(step) >= 0 ? step : DEFAULT_SPEED_STEP;
   });
+});
+
+// Patch 3: the speed hotkeys. Click a box to arm it, then the next real key is
+// the shortcut. Escape cancels, Backspace/Delete puts the default back.
+speedKeyCaps.forEach(([el]) => {
+  if (!el) return;
+  el.addEventListener("click", () => {
+    if (capturingCap === el) stopCapture();
+    else startCapture(el);
+  });
+});
+
+// One document listener, because the armed box owns the whole keyboard while it
+// is armed (including Tab and Enter — otherwise arming a box and pressing Tab
+// would bind nothing and move focus instead).
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (!capturingCap) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const key = e.key;
+    // A bare modifier press is the user reaching for a combination — wait for
+    // the key it modifies rather than binding "Shift".
+    if (
+      key === "Shift" ||
+      key === "Control" ||
+      key === "Alt" ||
+      key === "Meta" ||
+      key === "AltGraph"
+    )
+      return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return; // content.js ignores these
+    if (key === "Escape") {
+      stopCapture();
+      return;
+    }
+    const cap = capturingCap;
+    const field = cap === speedKeyCaps[1][0] ? "speedKeyUp" : "speedKeyDown";
+    const other = field === "speedKeyUp" ? "speedKeyDown" : "speedKeyUp";
+    const fallback =
+      field === "speedKeyUp" ? DEFAULT_SPEED_KEY_UP : DEFAULT_SPEED_KEY_DOWN;
+    const otherFallback =
+      field === "speedKeyUp" ? DEFAULT_SPEED_KEY_DOWN : DEFAULT_SPEED_KEY_UP;
+    // Backspace / Delete put this box's default back; anything else binds the
+    // key that was pressed. Both go through the SAME collision rule below — a
+    // reset that landed on the other box's key would otherwise leave two boxes
+    // holding one key, and content.js would silently let "up" win.
+    const next = key === "Backspace" || key === "Delete" ? fallback : key;
+    writeSettings((s) => {
+      // Taking the key the OTHER shortcut holds SWAPS them. A swap is the only
+      // outcome that leaves both boxes bound and needs no error message.
+      if (readSpeedKey(s, other, otherFallback) === next)
+        s[other] = readSpeedKey(s, field, fallback);
+      s[field] = next;
+    });
+    stopCapture();
+  },
+  true
+);
+
+// Clicking anywhere else disarms (the click that armed it is the one exception).
+document.addEventListener("click", (e) => {
+  if (!capturingCap) return;
+  if (capturingCap.contains(e.target)) return;
+  stopCapture();
 });
 
 // Unblock: read-modify-write settings.blockedCreators (delete the key).

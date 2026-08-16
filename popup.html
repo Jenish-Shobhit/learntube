@@ -98,6 +98,37 @@
     cursor: pointer;
   }
   .select:focus-visible { outline: 2px solid #30d158; outline-offset: 1px; }
+  /* Patch 3: the two key-capture boxes. Same chrome as .select so the speed
+     rows read as one group; the key face is monospaced so "[" and "l" can't be
+     confused for each other. */
+  .keys { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .keycap {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 9px;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    background: #1a1a1a;
+    color: #f1f1f1;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .keycap .keycap-face {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: #ddd;
+    min-width: 12px;
+    text-align: center;
+  }
+  .keycap:hover { border-color: #4a4a4a; }
+  .keycap:focus-visible { outline: 2px solid #30d158; outline-offset: 1px; }
+  .keycap.is-capturing {
+    border-color: #30d158;
+    color: #30d158;
+  }
+  .keycap.is-capturing .keycap-face { color: #30d158; }
   /* Blocked list */
   .blocked-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -185,7 +216,14 @@
         <option value="1">1×</option>
       </select>
     </div>
-    <p class="hint">The − and + buttons sit under the player on every video, and go up to 4×.</p>
+    <div class="row">
+      <span class="label">Speed keys</span>
+      <div class="keys">
+        <button class="keycap" type="button" id="speed-key-down">−<span class="keycap-face">[</span></button>
+        <button class="keycap" type="button" id="speed-key-up">+<span class="keycap-face">]</span></button>
+      </div>
+    </div>
+    <p class="hint">The − and + buttons sit under the player on every video, and go up to 4×. The same two steps are on the keyboard: click a key box above, then press the key you want. Esc cancels, Backspace puts the default back.</p>
   </div>
   <div class="panel">
     <div class="panel-title">Blocked</div>

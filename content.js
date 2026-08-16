@@ -4292,8 +4292,21 @@ const SPEED_WINDOW_MS = 2500;
 // millisecond in which the user's own menu pick would be wrongly put back.
 const SPEED_LOAD_MS = 800;
 const SPEED_MAX_REAPPLIES = 6; // fuse: a bounded number of put-backs per window
+// Patch 3 (v1.2.10): the keyboard shortcuts. Defaults are [ and ] — checked
+// against YouTube's own player keys (space/k, j/l, f, m, c, i, t, o, w, 0-9,
+// arrows, shift+,/. , +/- for caption size): the brackets are free.
+const DEFAULT_SPEED_KEY_DOWN = "[";
+const DEFAULT_SPEED_KEY_UP = "]";
 
 let speedStep = DEFAULT_SPEED_STEP; // mirror of settings.speedStep (synced)
+// Mirrors of settings.speedKeyDown / .speedKeyUp. We store and compare e.KEY
+// (the character the layout actually produced), not e.code: the popup shows the
+// key face back to the user, and a face is exactly what e.key gives on every
+// layout — e.code would print "BracketRight" to a user whose keyboard has no
+// bracket there. The cost is that a shifted face is a different shortcut ("[" is
+// not "{"), which is the honest reading of "the key I pressed".
+let speedKeyDown = DEFAULT_SPEED_KEY_DOWN;
+let speedKeyUp = DEFAULT_SPEED_KEY_UP;
 // THE SESSION RATE. Per document, never persisted (a 4× that outlived the tab
 // it was chosen in would be a trap) — but it SURVIVES leaving /watch, so a
 // detour to search or the Library and back keeps the speed the user chose.
@@ -4331,6 +4344,14 @@ let speedArmed = false;
 function readSpeedStep(settings) {
   const n = settings && Number(settings.speedStep);
   return SPEED_STEPS.indexOf(n) >= 0 ? n : DEFAULT_SPEED_STEP;
+}
+
+// settings.speedKeyDown / .speedKeyUp: a single e.key string, riding the
+// settings object like speedStep. Anything else — absent, empty, hand-edited to
+// a non-string, or an implausibly long name — reads as the default.
+function readSpeedKey(settings, field, fallback) {
+  const k = settings && settings[field];
+  return typeof k === "string" && k.length > 0 && k.length <= 20 ? k : fallback;
 }
 
 // Snap to 2dp and hold the rails. 0.25 and 1.0 steps both land on clean values;
@@ -4773,6 +4794,49 @@ function handleSpeedClick(e) {
 function onSpeedClick(e) {
   handleSpeedClick(e);
 }
+
+// Patch 3 (v1.2.10): the same two steps from the keyboard. A THIRD caller of
+// setSpeed — never a write to playbackRate — so speedChosen / speedTarget /
+// speedOwned mean exactly what a button press means and the put-back engine
+// defends a key-chosen speed identically.
+//
+// Is this element one the user is typing into? Checked on the composed source
+// AND on document.activeElement, because a keydown inside a shadow root is
+// retargeted to its host by the time it reaches the document.
+function isSpeedTypingTarget(el) {
+  if (!el || el.nodeType !== 1) return false;
+  const tag = el.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (el.isContentEditable) return true;
+  return !!(
+    el.closest && el.closest("input, textarea, select, [contenteditable]")
+  );
+}
+
+// One document-level CAPTURE listener: YouTube's own key handling sits on the
+// document too, so capture is what lets us swallow the key before it acts. We
+// swallow ONLY when a shortcut actually fires — every other key, and every key
+// while the gates are shut, passes through untouched.
+//
+// Auto-repeat is deliberately allowed: holding + is a stream of real user
+// choices, and each one re-opening the put-back window is correct (the window is
+// a wall-clock deadline, not a timer that restarts work).
+function onSpeedKeyDown(e) {
+  if (!e || e.ctrlKey || e.metaKey || e.altKey) return; // modifier = not ours
+  if (e.isComposing || e.keyCode === 229) return; // mid-IME composition
+  const up = e.key === speedKeyUp;
+  const down = e.key === speedKeyDown;
+  if (!up && !down) return;
+  if (!speedControlOn()) return; // master off / switch off / off /watch
+  const path = typeof e.composedPath === "function" ? e.composedPath() : null;
+  const src = (path && path[0]) || e.target;
+  if (isSpeedTypingTarget(src) || isSpeedTypingTarget(document.activeElement))
+    return; // the search box, a comment field, a rename input — leave it alone
+  e.preventDefault();
+  e.stopPropagation();
+  setSpeed(speedTarget + (up ? speedStep : -speedStep));
+}
+document.addEventListener("keydown", onSpeedKeyDown, true);
 
 // The standalone mount — same slot as the focus strip (top of #below), used on
 // every watch page that has no course strip. Only ever mounted when the strip
@@ -5573,6 +5637,9 @@ chrome.storage.sync.get([SETTINGS_KEY, LEGACY_KEY], (res) => {
   // Patch 2: seed the speed STEP (a number on settings, not a switch). The rate
   // itself is session state and always starts at 1×.
   speedStep = readSpeedStep(settings);
+  // Patch 3: seed the two speed hotkeys (also plain settings fields).
+  speedKeyDown = readSpeedKey(settings, "speedKeyDown", DEFAULT_SPEED_KEY_DOWN);
+  speedKeyUp = readSpeedKey(settings, "speedKeyUp", DEFAULT_SPEED_KEY_UP);
   // Only stamp the remembered-view attr while the rework is on — a fresh load
   // with master OFF must stay plain YouTube (no data-ytr-* on <html>). The
   // master ON transition re-stamps it (see the masterChanged branch).
@@ -5737,6 +5804,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     // Patch 2: the speed step is a plain mirror — the next − / + press uses it.
     // Nothing on screen shows the step, so there is nothing to re-render.
     speedStep = readSpeedStep(next);
+    // Patch 3: the hotkeys are mirrors too — a rebind in the popup is live on
+    // the next keystroke, with nothing on screen to re-render.
+    speedKeyDown = readSpeedKey(next, "speedKeyDown", DEFAULT_SPEED_KEY_DOWN);
+    speedKeyUp = readSpeedKey(next, "speedKeyUp", DEFAULT_SPEED_KEY_UP);
     const nextView = next.peekView === "list" ? "list" : "grid";
     if (nextView !== peekView) {
       peekView = nextView;
