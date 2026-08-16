@@ -523,6 +523,58 @@ html.yt-rework:not([data-ytr-show-endcards]) .ytp-cards-teaser {
   display: none !important;
 }
 
+/* 8g-2. Player — the post-video "video wall" (S4 gate, same switch as 8g).
+   8g only hid `.ytp-endscreen-content` (the LEGACY tile grid). Two holes were
+   left, both live-confirmed against the shipping player:
+
+   (a) The windowed endscreen `.html5-endscreen` (classes
+   `html5-endscreen ytp-player-content videowall-endscreen`) survived as a
+   full-bleed layer over the paused player: its modern tile container is
+   `.ytp-modern-endscreen-content` — which 8g's `.ytp-endscreen-content`
+   does NOT match — plus the `.ytp-endscreen-previous` / `.ytp-endscreen-next`
+   pager arrows. Hiding the PARENT layer is what actually kills it.
+
+   (b) The current player generation (`ytp-delhi-modern`) hides
+   `.html5-endscreen` ITSELF in ended-mode and instead shows
+   `.ytp-fullscreen-grid` — a full-bleed 12-tile recommendation grid
+   (`.ytp-fullscreen-grid-main-content` > `.ytp-fullscreen-grid-stills-container`
+   > `.ytp-modern-videowall-still`), which lives directly under `#movie_player`
+   and is NOT a descendant of the endscreen. Hiding `.ytp-fullscreen-grid`
+   wholesale takes the ended-mode grid AND its `.ytp-fullscreen-grid-peeking`
+   state (the strip that peeks in during fullscreen playback) — same element,
+   one rule — and `.ytp-more-videos-button` is the chrome affordance that
+   summons it.
+
+   `.html5-endscreen` (unqualified) covers both variants the player mounts —
+   `videowall-endscreen` and `ytp-autonav-endscreen` (the up-next countdown
+   card, a recommendation too). NOTE the countdown overlay is hidden here AND
+   the autonav timer is programmatically cancelled in content.js Step 24 — hiding
+   alone would take away the Cancel affordance while the timer kept running.
+   `.ytp-pause-overlay` does not mount in the current player at all; kept as
+   dead legacy belt in case an older/alternate generation is served.
+
+   Safe for end-of-video UX (live-verified): these layers are SIBLINGS of the
+   player chrome, so `.ytp-chrome-bottom`, the scrubber and the left
+   play/replay button are untouched, the last video frame stays visible, and
+   replay still works on hover. Switch off (data-ytr-show-endcards present)
+   => every native surface returns. */
+html.yt-rework:not([data-ytr-show-endcards]) .html5-endscreen,
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-endscreen-previous,
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-endscreen-next,
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-fullscreen-grid,
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-more-videos-button,
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-autonav-endscreen-upnext-container,
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-autonav-endscreen-countdown-overlay,
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-pause-overlay {
+  display: none !important;
+}
+
+/* Keeps player controls visible if the player enters the fullscreen-grid state
+   while our grid is hidden. */
+html.yt-rework:not([data-ytr-show-endcards]) .ytp-fullscreen-grid-active .ytp-chrome-bottom {
+  display: flex !important;
+}
+
 /* =====================================================================
    9. Homepage feed neutralized (Learn — clears the slate for Step 4)
    ---------------------------------------------------------------------

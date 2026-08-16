@@ -4643,6 +4643,106 @@ window.addEventListener("yt-rework:locationchange", roomTickWithRetry);
 window.addEventListener("popstate", roomTickWithRetry);
 window.addEventListener("yt-navigate-finish", roomTickWithRetry);
 
+// --- Step 24: cancel autoplay-next when the end wall is hidden ----------------
+// CSS section 8g-2 hides the post-video recommendation surfaces, INCLUDING the
+// autonav countdown card. That card is also the only Cancel affordance: hiding
+// it alone would leave the player's autonav timer running invisibly and carry
+// the user off to a recommended video with no warning — worse than native. So
+// whenever we hide it, we also cancel it, and the two must stay one decision.
+//
+// Cancel, not "disable autoplay": the per-video cancel button is the player's
+// own sanctioned path and leaves the user's global autoplay preference alone.
+// Live-verified the button is mounted DURING playback, already matched at
+// t=0ms of the retry window — it is display:none under 8g-2, and a hidden
+// element still takes a programmatic .click() — so the bounded retry below is
+// headroom for a slow tick, not load-bearing for a late mount.
+const AUTONAV_CANCEL_SELECTORS = [
+  ".ytp-autonav-endscreen-upnext-cancel-button",
+  ".ytp-autonav-endscreen-cancel-button",
+  ".ytp-upnext-cancel",
+];
+
+const CANCEL_AUTONAV_INTERVAL = 250;
+const CANCEL_AUTONAV_DURATION = 3000;
+// makeBoundedRetry doesn't expose tick count, so track attempts ourselves
+// (reset whenever the retry (re)starts) to know when we're on the LAST tick.
+const CANCEL_AUTONAV_MAX_TICKS =
+  Math.floor(CANCEL_AUTONAV_DURATION / CANCEL_AUTONAV_INTERVAL) + 1;
+let cancelAutonavAttempts = 0;
+
+// True only when we are actually hiding the end wall on a watch page: master on
+// + S4 on (hideEndCards) + /watch. Same three conditions the CSS gate encodes,
+// so cancel and hide can never disagree.
+function autonavCancelArmed() {
+  return (
+    reworkEnabled &&
+    togglesCache.hideEndCards !== false &&
+    location.pathname === "/watch"
+  );
+}
+
+// One tick: click the cancel control if it has mounted. Returns true to STOP.
+function cancelAutonavTick() {
+  if (!autonavCancelArmed()) return true; // switched off mid-window -> stand down
+  cancelAutonavAttempts++;
+  const player = document.getElementById("movie_player") || document;
+  for (const sel of AUTONAV_CANCEL_SELECTORS) {
+    const btn = player.querySelector(sel);
+    if (btn) {
+      btn.click();
+      return true;
+    }
+  }
+  // Belt: no cancel control this generation. Turn autonav OFF at the chrome
+  // toggle, but ONLY while it reads as on — so this is a no-op once autoplay is
+  // already off, and never toggles it back ON. Unlike the per-video cancel this
+  // PERSISTS the user's autoplay preference; accepted as the fallback for a
+  // study tool, where "nothing plays itself" is the whole point. Gated to the
+  // FINAL retry tick (so a late-mounting cancel button always wins) AND to
+  // `ended-mode` on the player (so a spurious `ended` from a preview/pre-roll
+  // can't flip the user's global pref).
+  const isFinalTick = cancelAutonavAttempts >= CANCEL_AUTONAV_MAX_TICKS;
+  const inEndedMode = player.classList && player.classList.contains("ended-mode");
+  if (isFinalTick && inEndedMode) {
+    const toggle = document.querySelector(
+      '.ytp-autonav-toggle-button[aria-checked="true"]'
+    );
+    if (toggle) {
+      toggle.click();
+      return true;
+    }
+  }
+  return false; // keep ticking until the window elapses
+}
+
+// ~3s window: long enough for the endscreen to mount, short enough that a
+// video ending in a background tab costs a handful of querySelectors. Bounded,
+// never a standing poll; a fresh `ended` supersedes any loop still running.
+const cancelAutonavWithRetry = makeBoundedRetry(
+  cancelAutonavTick,
+  CANCEL_AUTONAV_INTERVAL,
+  CANCEL_AUTONAV_DURATION
+);
+
+// `ended` does not bubble, so it is heard in the CAPTURE phase on the document:
+// one listener, wired once at load, that catches whichever <video> the player
+// is using. This is why nothing here needs re-arming per SPA navigation — the
+// player swaps its media element freely and the gates are re-read on every
+// event, so flipping S4 or the master switch takes effect on the next video
+// end with no listener churn. Off /watch (e.g. a preview on /results) the gate
+// returns false and we never touch the player.
+document.addEventListener(
+  "ended",
+  (ev) => {
+    const t = ev.target;
+    if (!t || t.tagName !== "VIDEO") return;
+    if (!autonavCancelArmed()) return;
+    cancelAutonavAttempts = 0; // fresh retry window -> fresh tick count
+    cancelAutonavWithRetry();
+  },
+  true
+);
+
 // --- Step 15: archived inbox rows --------------------------------------------
 // "Archive" clears a row from the inbox (the doc's replacement for YouTube's
 // mystery 3-dot menu). Archived state is a per-video-id map persisted in
