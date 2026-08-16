@@ -47,7 +47,9 @@ switch, with a per-surface switch for any piece you want handed back.
   Press **Show feed** to reveal, on request, exactly what the algorithm would
   have shown you — underneath your topics, in a calm two-line List or a Grid
   view (your choice is remembered). It's display-only; peeking never feeds the
-  algorithm.
+  algorithm. The List view draws video rows only — an in-feed ad has no
+  two-line form, so it isn't drawn there; the Grid view leaves ads exactly as
+  YouTube renders them, as does the native feed with LearnTube off.
 - **Block a channel for good.** Open a video's ordinary **⋮** menu — YouTube's
   own, on a home or Peek card, or the watch page's sidebar — and pick
   **🚫 Block this channel**. That creator's videos then leave everywhere

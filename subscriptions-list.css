@@ -2569,6 +2569,27 @@ html.yt-rework[data-ytr-peek][data-ytr-peek-view="list"] ytd-browse[page-subtype
    pinned, lifted and un-dimmed it (including its reduced-motion block) went with
    §16·11. Peek adds no per-row control at all now. */
 
+/* 16·14. v1.2.11: in-feed AD SLOTS leave the List Peek — the §16·0 cure, applied
+   to the one non-video block that still got through. A non-Premium home feed
+   carries ytd-ad-slot-renderer rows (a display ad: a fixed two-column card, big
+   image well on the left, headline + Sponsored + sitelink buttons on the right).
+   It is not a video lockup, so NOTHING in §16·1..§16·12 reaches it: it keeps its
+   full native card height (243px measured) while the rows around it are 65px
+   text lines — the "this is appearing too big" the owner reported.
+   Sizing it down was tried first and is not reachable cleanly: the layout
+   view-model owns its own height and an image well that survives as a grey
+   placeholder once the creative is hidden, so it stays several rows tall and
+   only gets uglier the harder you push. Like the games/news shelves in §16·0,
+   a block the List recipe cannot render as a two-line row simply does not
+   render. Display-only, never reorders.
+   Scope is deliberately narrow: List Peek, home, master on. Peek GRID is NOT
+   included — there the ad renders at exactly the card size of its neighbours
+   (424x317, same as the video cards), so there is nothing to fix; and the S6-off
+   native feed never stamps data-ytr-peek, so native stays fully native. */
+html.yt-rework[data-ytr-peek][data-ytr-peek-view="list"] ytd-browse[page-subtype="home"] ytd-rich-item-renderer:has(:is(ytd-ad-slot-renderer, ad-slot-view-model)) {
+  display: none !important;
+}
+
 /* =====================================================================
    17. Block — silence a channel everywhere recommendations render (Phase 3)
    ---------------------------------------------------------------------
