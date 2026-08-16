@@ -179,14 +179,20 @@ window.addEventListener("yt-navigate-finish", redirectShorts);
 // doc-wide rule that could match a search row is written
 // `html…:not([data-ytr-route="search"])` (§8a, §8b, §17).
 //
-// WHAT MAKES AN SPA HOP INTO SEARCH NATIVE FROM ITS FIRST FRAME: the patched
-// pushState/replaceState above. YouTube routes through the History API, so our
-// yt-rework:locationchange fires SYNCHRONOUSLY inside the pushState call —
-// location.pathname is already "/results" and the stamp lands before the new
-// page renders a single row. (yt-navigate-start is NOT that guarantee: it fires
-// BEFORE the History API updates, so the pathname it sees is still the old one.
-// It is not listened for here.) yt-navigate-finish and popstate are the
-// belt-and-braces for a hop we somehow missed, and — just as important — the
+// WHAT MAKES AN SPA HOP INTO SEARCH NATIVE FROM ITS FIRST FRAME: NOT the
+// patched pushState/replaceState above — that patch lives in this content
+// script's ISOLATED world, so YouTube's own main-world History API calls
+// never run through it, and yt-rework:locationchange never fires for a real
+// YouTube SPA nav. (It still fires for any pushState/replaceState LearnTube
+// itself makes, which is why the listener stays wired.) The real carriers are
+// yt-navigate-finish and popstate: both fire after location.pathname has
+// already updated to "/results", and live probing (two trials) measured
+// YouTube inserting the first search result row 12-24ms AFTER
+// yt-navigate-finish — so the stamp, applied from that listener, is on
+// <html> well before any row exists. (yt-navigate-start is NOT usable here:
+// it fires BEFORE the History API updates, so the pathname it sees is still
+// the old one. It is not listened for here.) Whichever of yt-navigate-finish
+// / popstate fires first does the stamping; and — just as important — the
 // attribute is REMOVED the moment we leave, so every other surface gets its
 // rules back intact.
 //
