@@ -31,7 +31,9 @@ switch, with a per-surface switch for any piece you want handed back.
 - **Subscriptions as an inbox.** Your Subscriptions feed becomes a compact,
   two-line text list (channel name above, title below). Videos you've opened
   dim like read mail, you can star creators, filter to your VIPs, and save a
-  video to a learning topic — all without leaving the page.
+  video to a learning topic — all without leaving the page. Like the List Peek
+  below, the inbox draws video rows only — an in-feed ad has no two-line form,
+  so it isn't drawn there.
 - **A Learning home — with Peek.** The recommendation-stuffed home page is
   replaced with your own library: add YouTube playlists as "topics" — either
   from the popup or with the **＋ Add to LearnTube** button LearnTube adds to

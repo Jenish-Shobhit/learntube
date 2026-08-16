@@ -94,6 +94,21 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-section-rendere
   display: none !important;
 }
 
+/* 5b. v1.2.11: in-feed AD SLOTS leave the inbox too — the §5 cure, extended to
+   the one non-video block it missed. §5 only reaches ytd-rich-section-renderer;
+   a non-Premium Subscriptions feed also carries ytd-ad-slot-renderer INSIDE an
+   ordinary ytd-rich-item-renderer, which no §6 rule touches (it is not a video
+   lockup). Reproduced live: ad rows measured 90/171/281px against the 65px
+   two-line rows around them — a giant Sponsored card in the middle of the
+   inbox. Same shape and same reasoning as §16·14 (see its comment for why
+   shrinking an ad card into a two-line row is not reachable cleanly); this one
+   needs no Peek attrs, because the inbox recipe is live whenever rework is on,
+   so html.yt-rework + the page-subtype IS the gate. Display-only, never
+   reorders; master off => class gone => the ad is back with native YouTube. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] ytd-rich-item-renderer:has(:is(ytd-ad-slot-renderer, ad-slot-view-model)) {
+  display: none !important;
+}
+
 /* =====================================================================
    6. NEW YouTube layout — yt-lockup-view-model (the current feed)
    ---------------------------------------------------------------------
@@ -2571,11 +2586,13 @@ html.yt-rework[data-ytr-peek][data-ytr-peek-view="list"] ytd-browse[page-subtype
 
 /* 16·14. v1.2.11: in-feed AD SLOTS leave the List Peek — the §16·0 cure, applied
    to the one non-video block that still got through. A non-Premium home feed
-   carries ytd-ad-slot-renderer rows (a display ad: a fixed two-column card, big
-   image well on the left, headline + Sponsored + sitelink buttons on the right).
-   It is not a video lockup, so NOTHING in §16·1..§16·12 reaches it: it keeps its
-   full native card height (243px measured) while the rows around it are 65px
-   text lines — the "this is appearing too big" the owner reported.
+   carries ytd-ad-slot-renderer rows: display ads in several layouts (the widest
+   one measured is a two-column card — big image well on the left, headline +
+   Sponsored + sitelink buttons on the right — others are shorter).
+   None of them is a video lockup, so NOTHING in §16·1..§16·12 reaches them: each
+   keeps its full native card height (108/171/243px measured across variants)
+   while the rows around it are 65px text lines — the "this is appearing too
+   big" the owner reported.
    Sizing it down was tried first and is not reachable cleanly: the layout
    view-model owns its own height and an image well that survives as a grey
    placeholder once the creative is hidden, so it stays several rows tall and
