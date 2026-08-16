@@ -195,9 +195,15 @@ window.addEventListener("yt-navigate-finish", redirectShorts);
 // no data-ytr-* on <html>. Nothing paints under our rules before apply() runs,
 // because our rules all hang off that class.
 //
-// ACCEPTED CONSEQUENCE of the decree: blocked channels and Shorts shelves DO
-// appear in search results. That is the trade the owner chose — search is
-// native, and native means all of it.
+// ACCEPTED CONSEQUENCE of the decree: blocked channels DO appear in search
+// results. That is the trade the owner chose — search is native.
+//
+// THE ONE EXCEPTION (v1.2.4, owner order): Shorts. The Hide-Shorts switch now
+// reaches /results as well — "that's what the toggle button is for". It is done
+// PURELY in CSS (§14e), whose rules are the mirror image of the §8 gate: they
+// require data-ytr-route="search" to be PRESENT, and they ride the same
+// data-ytr-show-shorts opt-out attr as §8. No JS runs, and no DOM is mutated,
+// on /results because of it — the decree's real promise is intact.
 function onSearchRoute() {
   return location.pathname === "/results";
 }

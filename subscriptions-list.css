@@ -444,8 +444,10 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[dat
    sections) carries :not([data-ytr-route="search"]) — content.js stamps that
    attribute on <html> at document_start and on every SPA navigation, so search
    is native from the first paint and gets its rules back the instant you
-   leave. Accepted consequence: Shorts shelves and Shorts tiles DO appear in
-   search results. 8c (the left guide) and 8e-8g (watch/player) are deliberately
+   leave. v1.2.4: search is no longer Shorts-free by omission — §14e re-hides
+   Shorts (and ONLY Shorts) on /results with its own route-matched copy of these
+   rules, so §8 stays the owner of every non-search surface and §14e owns search.
+   8c (the left guide) and 8e-8g (watch/player) are deliberately
    NOT gated — they are site chrome / other routes, not the results list, and
    gating them would make the sidebar flicker as you navigate.
    ===================================================================== */
@@ -1838,7 +1840,79 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model[dat
    DOM mutations and ZERO LearnTube CSS — enforced by the route stamp
    data-ytr-route="search" on <html>, which every doc-wide hiding rule in this
    file negates on. Section 14 is kept as this tombstone so nobody re-adds it.
+
+   v1.2.4 adds exactly ONE exception, 14e below: the Hide-Shorts switch now
+   reaches search too. Nothing else about the decree moves — blocked channels
+   still appear in search, and no JS runs on /results.
    ===================================================================== */
+
+/* 14e. Shorts in search — the one deliberate exception to the decree
+   (v1.2.4, owner order: "search stays native EXCEPT Shorts — that's what the
+   toggle button is for").
+
+   APPLIES ON /results BY DESIGN, so — unlike §8a/§8b/§8d — these rules do NOT
+   carry :not([data-ytr-route="search"]). They are the mirror image: they only
+   apply while that stamp IS present, so search is the ONLY place they act and
+   §8 stays the owner of every other surface (no double-hiding, no drift).
+
+   CONDITIONED ON BOTH SWITCHES: html.yt-rework = the master switch;
+   :not([data-ytr-show-shorts]) = the per-surface Hide-Shorts switch (content.js
+   applyToggles() stamps data-ytr-show-shorts on <html> when the user turns the
+   hide OFF, and re-stamps it on EVERY settings write — so flipping the switch
+   while sitting on /results re-styles instantly, with no JS touching the page).
+   Both signals live on <html> and are set inside the same synchronous block as
+   the class, so a hard load of /results never flashes a shelf in.
+
+   PERF — why this cannot bring back the v1.2 search delay: it is CSS ONLY (no
+   sweep, no observer, no stamp pass, zero DOM mutations on /results), and every
+   :has() here is the CHEAP per-row form — the SUBJECT is the small result
+   renderer or the rare shelf element itself, with a descendant anchor/lockup
+   test (measured 5-15µs/row). NOT ONE rule makes a big, anchor-dense,
+   constantly-mutating container (ytd-search / ytd-item-section-renderer /
+   ytd-shelf-renderer) the subject — that container-subject form is what forced
+   a full-subtree re-scan per streamed row and is permanently forbidden here
+   (see §8a and commit e551ff0).
+
+   CONSEQUENCE ACCEPTED BY THE OWNER: when a shelf's wrapper section carries its
+   own "Shorts" heading, hiding the shelf can leave an empty gap. We do NOT
+   collapse it — collapsing needs a container-subject :has() (the old 14b) or a
+   JS stamp pass, and both are banned on /results.
+
+   Blocked-channel hiding remains search-exempt (§17 keeps its route gate). */
+
+/* 14e-1. Shorts shelves. Plain tag matches where possible; the Wiz shelf
+   (grid-shelf-view-model) is shared with non-Shorts grids, so it is gated by a
+   TIGHT :has() on the shorts lockup it contains — a rare subject (a handful per
+   page), so cheap. Both generations covered: ytd-/ytm-reel-shelf-renderer +
+   ytd-rich-shelf-renderer[is-shorts] (legacy) and grid-shelf-view-model (Wiz).
+   ytd-shelf-renderer is deliberately NOT a subject here — see the perf note. */
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytd-reel-shelf-renderer,
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytm-reel-shelf-renderer,
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytd-rich-shelf-renderer[is-shorts],
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) grid-shelf-view-model:has(ytm-shorts-lockup-view-model),
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2) {
+  display: none !important;
+}
+
+/* 14e-2. Individual Shorts tiles. The shorts lockup tags are Shorts BY
+   DEFINITION, so they hide on a plain tag match (zero invalidation cost) —
+   which also catches any tile whose enclosing shelf tag we failed to match. */
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytm-shorts-lockup-view-model,
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytm-shorts-lockup-view-model-v2,
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytd-reel-item-renderer {
+  display: none !important;
+}
+
+/* 14e-3. Shorts mixed into the vertical results list as ordinary rows. The
+   :has() SUBJECT is always the single result renderer — yt-lockup-view-model
+   (current search DOM) or ytd-video-renderer (legacy) — never a wrapper, so
+   invalidation stays local as results stream in. Hiding the whole renderer (not
+   just the inner link) avoids leaving a half-drawn row. */
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) yt-lockup-view-model:has(a[href^="/shorts/"]),
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytd-video-renderer:has(a[href^="/shorts/"]),
+html.yt-rework[data-ytr-route="search"]:not([data-ytr-show-shorts]) ytd-video-renderer:has(ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]) {
+  display: none !important;
+}
 
 /* =====================================================================
    15. The Lecture (Step 23) — centered player + the focus strip

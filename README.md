@@ -63,10 +63,10 @@ switch, with a per-surface switch for any piece you want handed back.
   without leaving the focus strip — and the masthead is reclaimed down to
   [logo · search · account].
 - **Search is left alone.** LearnTube doesn't touch the results page at
-  all — no lens, no toolbar, no restyle, and no hiding — so you get YouTube's
-  own search, at YouTube's own speed. Shorts shelves still show there and
-  blocked channels can still appear there; blocking and Shorts-hiding apply
-  everywhere else.
+  all — no lens, no toolbar, no restyle — so you get YouTube's own search, at
+  YouTube's own speed. The one exception is the Shorts switch: when it's on,
+  Shorts shelves and Shorts results are hidden there too (turn the switch off
+  and search shows them again). Blocked channels can still appear there.
 
 Everything is display-only: LearnTube **never reorders your feed or touches
 YouTube's recommendation algorithm.** It only hides, restyles, and adds its own

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LearnTube",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "minimum_chrome_version": "105",
   "description": "A calmer YouTube for learning: switches that hide Shorts and clutter, a Library of your playlists, and a quiet Subscriptions inbox.",
   "permissions": [

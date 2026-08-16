@@ -23,8 +23,9 @@ unzip -l learntube-<version>.zip   # sanity check: exactly the 6 runtime items, 
 Unzip to a temp folder → **Load unpacked** → walk the key flows: master toggle, every per-surface
 switch (each hide off hands that piece back to native YouTube; the feed-button and start-page
 switches turn off LearnTube's own additions), truly native search (zero LearnTube DOM/CSS on
-`/results` — results load at YouTube's own speed, blocked channels can still appear there, Shorts
-sections still show there, and the **⋮** menu offers no Block row there), Library home, **Show
+`/results` — results load at YouTube's own speed, blocked channels can still appear there, and the
+**⋮** menu offers no Block row there; the one exception is the Shorts switch — with it on, Shorts
+shelves and Shorts results are hidden there too via pure CSS), Library home, **Show
 feed** (Peek) in both List and Grid, **⊘ Block channel** from YouTube's own **⋮** menu on a home or
 Peek card / watch-page sidebar (and confirm it's a no-op inside a playlist, on Subscriptions, and
 on a channel's own page) plus unblock from the popup's Blocked list, adding a playlist via the popup
