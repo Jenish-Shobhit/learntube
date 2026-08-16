@@ -232,10 +232,11 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-
    --lt-text-2, NOT --lt-text-3: text-3 is rgba(235,235,245,.34) on dark, which
    composites to 2.78:1 on #0f0f0f (vs the old #909090's 6.00:1) and collapses to
    1.64:1 once §7/§11 dim a read row to .55 — i.e. it would have traded a light
-   bug for a dark one. --lt-text-2 lands at 6.61:1 on dark (a hair brighter than
+   bug for a dark one. --lt-text-2 lands at 6.63:1 on dark (a hair brighter than
    the grey it replaces) and 7.91:1 on white. The byline still reads quieter than
-   the title above it via size (1.2rem vs 1.3rem) and than the bold sender name
-   via weight. §16·10 carries the identical value so the Peek mirror matches. */
+   the bold sender name it sits beside (weight) and than the title §6f orders
+   BELOW it (size: 1.2rem vs 1.3rem). §16·10 carries the identical value so the
+   Peek mirror matches. */
 html.yt-rework ytd-browse[page-subtype="subscriptions"] :is(.yt-lockup-metadata-view-model__metadata, .ytLockupMetadataViewModelMetadata) {
   margin: 0 !important;
   display: flex !important;
@@ -311,6 +312,13 @@ html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model:hov
    (see §17b, §18) keeps dark on its original values, unchanged. */
 html.yt-rework ytd-browse[page-subtype="subscriptions"] .ytr-star.is-filled {
   color: #a86b00 !important;
+  opacity: 1 !important;
+}
+/* ...and it must STAY fully visible while the row is hovered. The rule above is
+   0-4-2, so it lost `opacity` to the row-hover reveal (0-4-3) and a set rating
+   half-faded the moment you moved onto its row — the same cascade trap as the
+   :hover rule below. This row-scoped twin (0-5-3) settles it. */
+html.yt-rework ytd-browse[page-subtype="subscriptions"] yt-lockup-view-model:hover .ytr-star.is-filled {
   opacity: 1 !important;
 }
 /* The star under the cursor pops, for clear click feedback.
