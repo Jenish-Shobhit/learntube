@@ -3773,6 +3773,15 @@ function isPlaylistPage() {
 // rejected and the next selector is tried.
 function isVisibleHeaderCandidate(el) {
   if (!el || el.closest("ytd-browse[hidden], [hidden]")) return false;
+  // [hidden] alone isn't enough. Measured (channel -> playlist via Back): on
+  // popstate `location` already reads /playlist while the DOM still shows the
+  // CHANNEL browse — not yet [hidden], header still laid out — and channel pages
+  // ship the very same yt-page-header-view-model. YouTube flips the browses
+  // ~300ms later, stranding our wrap inside the now-hidden channel. So a
+  // candidate in a browse that NAMES a subtype other than "playlist" is
+  // rejected. No page-subtype attribute -> no opinion (drift tolerance).
+  const browse = el.closest("ytd-browse[page-subtype]");
+  if (browse && browse.getAttribute("page-subtype") !== "playlist") return false;
   if (el.offsetParent !== null || el.getClientRects().length) return true;
   // A display:contents host (the wiz custom elements often are) generates no
   // layout box of its own yet still renders its children — don't reject it.
@@ -4088,6 +4097,18 @@ function removePlaylistAdd() {
     .forEach((n) => n.remove());
 }
 
+// A mounted wrap only counts as live while it still RENDERS in a live header:
+// its parent must pass the same gate mount used (not in a hidden/foreign browse,
+// has a layout box), and the wrap itself must have a box — the parent test alone
+// lets a display:contents wiz host inside a display:none container through.
+// Without this the tick's fast path saw `document.contains(wrap)` succeed for a
+// wrap stranded in the flipped-away channel browse and idled on it forever.
+function isPlaylistAddWrapLive(wrap) {
+  if (!wrap || !document.contains(wrap)) return false;
+  if (!isVisibleHeaderCandidate(wrap.parentElement)) return false;
+  return wrap.offsetParent !== null || wrap.getClientRects().length > 0;
+}
+
 // One tick of the per-nav job. Off-route or master-off -> tear down and stop.
 // On-route it keeps ticking for the whole window (cheap: one getElementById)
 // so a header YouTube re-renders mid-hydration gets the button back — the same
@@ -4098,12 +4119,13 @@ function playlistAddTick() {
     return true; // nothing to do on this route
   }
   const wrap = playlistAddWrap();
-  // Fast path — but only for a SINGLE, live, correctly-keyed wrap. A second wrap
-  // (a header YouTube cloned) or a wrap keyed to the playlist we just navigated
-  // AWAY from must fall through to the rebuild below, or we'd idle forever on a
-  // duplicate / file the previous list id.
+  // Fast path — but only for a SINGLE, live, VISIBLE, correctly-keyed wrap. A
+  // second wrap (a header YouTube cloned), a wrap left behind in a browse that
+  // got hidden under us, or one keyed to the playlist we just navigated AWAY
+  // from must fall through to the rebuild below, or we'd idle forever on an
+  // invisible / duplicate button, or file the previous list id.
   const many = document.querySelectorAll("." + PLAYLIST_ADD_WRAP_CLASS).length > 1;
-  if (wrap && document.contains(wrap) && !many) {
+  if (isPlaylistAddWrapLive(wrap) && !many) {
     if (wrap.dataset.ytrList !== currentPlaylistKey()) {
       // Same header node, new playlist: drop the panel built for the old id
       // (its click handlers close over it) and re-key the button.

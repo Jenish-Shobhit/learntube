@@ -32,7 +32,9 @@ feed** (Peek) in both List and Grid, **⊘ Block channel** from YouTube's own **
 Peek card / watch-page sidebar (and confirm it's a no-op inside a playlist, on Subscriptions, and
 on a channel's own page) plus unblock from the popup's Blocked list, adding a playlist via the popup
 or the playlist page's **＋ Add to LearnTube** button and checking it hydrates title/lectures right
-away, Subscriptions inbox (stars / VIP / overflow, **in both light and dark mode**), in-feed ad rows
+away (and that the button still shows up when you land on the playlist via Back/Forward from a
+channel page — e.g. playlist → its `by <channel>` link → Back — not only by search), Subscriptions
+inbox (stars / VIP / overflow, **in both light and dark mode**), in-feed ad rows
 (absent from the Subscriptions inbox and from Peek **List**, still there in Peek **Grid** and with the
 master off), a course view (including a manual lecture tick /
 un-tick), a topic watch page (centered player + focus strip, **Up next ▾** and **← Previous lecture**),
